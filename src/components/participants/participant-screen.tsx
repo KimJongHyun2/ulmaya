@@ -27,6 +27,16 @@ export default function ParticipantScreen({
   onNext,
 }: ParticipantScreenProps) {
   const [searchQuery, setSearchQuery] = useState("")
+  const [isSyncing, setIsSyncing] = useState(false)
+
+  const handleSyncKakaoFriends = () => {
+    setIsSyncing(true)
+    // 실제 카카오 친구 API 호출 대신 시뮬레이션
+    setTimeout(() => {
+      alert("카카오 친구 목록을 불러왔습니다! (데모 모드)")
+      setIsSyncing(false)
+    }, 1500)
+  }
 
   const toggleParticipant = (friend: Participant) => {
     setSelectedParticipants(toggleParticipantSelection(selectedParticipants, friend))
@@ -73,9 +83,22 @@ export default function ParticipantScreen({
       {/* Quick Actions */}
       <div className="px-4 py-2">
         <div className="flex gap-2">
-          <button className="flex-1 flex items-center justify-center gap-2 py-3 bg-kakao text-kakao-foreground rounded-xl font-medium">
-            <MessageCircle className="w-5 h-5" />
-            카카오 친구 불러오기
+          <button
+            onClick={handleSyncKakaoFriends}
+            disabled={isSyncing}
+            className="flex-1 flex items-center justify-center gap-2 py-3 bg-kakao text-kakao-foreground rounded-xl font-medium disabled:opacity-70 transition-opacity"
+          >
+            {isSyncing ? (
+              <span className="flex items-center gap-2">
+                <span className="w-4 h-4 border-2 border-kakao-foreground/30 border-t-kakao-foreground rounded-full animate-spin" />
+                불러오는 중...
+              </span>
+            ) : (
+              <>
+                <MessageCircle className="w-5 h-5 fill-current" />
+                카카오 친구 불러오기
+              </>
+            )}
           </button>
           <button className="flex items-center justify-center gap-2 px-4 py-3 bg-card border border-border rounded-xl">
             <Link2 className="w-5 h-5" />
@@ -93,7 +116,11 @@ export default function ParticipantScreen({
                 onClick={() => toggleParticipant(p)}
                 className="flex items-center gap-2 px-3 py-2 bg-primary/10 rounded-full border border-primary/20 shrink-0"
               >
-                <span className="text-lg">{p.avatar}</span>
+                {p.imageUrl ? (
+                  <img src={p.imageUrl} alt={p.name} className="w-6 h-6 rounded-full object-cover" />
+                ) : (
+                  <span className="text-lg">{p.avatar}</span>
+                )}
                 <span className="text-sm font-medium text-foreground">{p.name}</span>
                 <span className="w-4 h-4 bg-primary rounded-full flex items-center justify-center">
                   <Check className="w-3 h-3 text-primary-foreground" />
@@ -124,8 +151,12 @@ export default function ParticipantScreen({
                     : "border-transparent bg-card"
                 }`}
               >
-                <div className="w-14 h-14 bg-muted rounded-full flex items-center justify-center text-2xl">
-                  {friend.avatar}
+                <div className="w-14 h-14 bg-muted rounded-full flex items-center justify-center text-2xl overflow-hidden">
+                  {friend.imageUrl ? (
+                    <img src={friend.imageUrl} alt={friend.name} className="w-full h-full object-cover" />
+                  ) : (
+                    friend.avatar
+                  )}
                 </div>
                 <span className="text-sm font-medium">{friend.name}</span>
               </button>
@@ -150,8 +181,12 @@ export default function ParticipantScreen({
                   : "border-transparent bg-card"
               }`}
             >
-              <div className="w-12 h-12 bg-muted rounded-full flex items-center justify-center text-xl">
-                {friend.avatar}
+              <div className="w-12 h-12 bg-muted rounded-full flex items-center justify-center text-xl overflow-hidden">
+                {friend.imageUrl ? (
+                  <img src={friend.imageUrl} alt={friend.name} className="w-full h-full object-cover" />
+                ) : (
+                  friend.avatar
+                )}
               </div>
               <span className="flex-1 text-left font-medium">{friend.name}</span>
               <div

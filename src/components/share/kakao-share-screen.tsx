@@ -4,6 +4,7 @@ import { useState } from "react"
 import { ArrowLeft, Check, Send } from "lucide-react"
 import type { ReceiptInfo } from "@/types/receipt"
 import type { SettlementItem } from "@/types/settlement"
+import { shareToKakao } from "@/lib/kakao"
 
 interface KakaoShareScreenProps {
   receiptInfo: ReceiptInfo
@@ -25,6 +26,12 @@ export default function KakaoShareScreen({
   const [sentIds, setSentIds] = useState<number[]>([])
 
   const handleSendToKakao = (settlement: SettlementItem) => {
+    shareToKakao({
+      title: `${receiptInfo.storeName} 정산 요청`,
+      description: `${settlement.participant.name}님의 정산 금액은 ${settlement.amount.toLocaleString()}원입니다.`,
+      buttonText: "정산하기",
+      link: window.location.origin, // 실제 서비스 시에는 정산 상세 페이지 링크가 들어갈 수 있습니다.
+    })
     setSentIds((prev) => [...prev, settlement.participant.id])
     onSendComplete(settlement.participant.id)
     setToastMessage(`${settlement.participant.name}님에게 전송 완료!`)
@@ -33,13 +40,21 @@ export default function KakaoShareScreen({
   }
 
   const handleSendAll = () => {
+    const totalAmount = settlements.reduce((sum, s) => sum + s.amount, 0)
+    shareToKakao({
+      title: `${receiptInfo.storeName} 정산 요청`,
+      description: `총 ${settlements.length}명의 정산이 진행 중입니다.\n총 금액: ${totalAmount.toLocaleString()}원`,
+      buttonText: "전체 내역 보기",
+      link: window.location.origin,
+    })
+    
     settlements.forEach((s) => {
       if (!sentIds.includes(s.participant.id)) {
-        setSentIds((prev) => [...prev, s.participant.id])
         onSendComplete(s.participant.id)
       }
     })
-    setToastMessage("모든 참여자에게 전송 완료!")
+    setSentIds(settlements.map(s => s.participant.id))
+    setToastMessage("카카오톡으로 공유되었습니다!")
     setShowToast(true)
     setTimeout(() => setShowToast(false), 2000)
   }
