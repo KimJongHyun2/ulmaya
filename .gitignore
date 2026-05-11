@@ -1,16 +1,34 @@
-# v0 sandbox internal files
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# Production
+build/
+
+# Environment variables
+# 반드시 .env* 패턴을 사용하여 모든 환경변수 파일이 보호되도록 합니다.
+.env*
+.local
+*.local
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Vercel
+.vercel
+
+# Project specific
+.snowflake/
+.v0-trash/
 __v0_runtime_loader.js
 __v0_devtools.tsx
 __v0_jsx-dev-runtime.ts
-.snowflake/
-.v0-trash/
-.vercel/
 next.user-config.*
-
-# Environment variables
-.env*.local
-
-# Common ignores
-node_modules
-.next/
-.DS_Store
+next-env.d.ts
+*.tsbuildinfo
