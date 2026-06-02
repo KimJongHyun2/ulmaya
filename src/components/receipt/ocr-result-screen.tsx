@@ -61,6 +61,13 @@ export default function OcrResultScreen({
       <div className="px-4 py-4">
         <div className="bg-card rounded-2xl p-5 shadow-sm border border-border">
           <h3 className="text-xl font-bold mb-3">{receiptInfo.storeName}</h3>
+          {(receiptInfo.imagePreview || receiptInfo.imageUrl) && (
+            <img
+              src={receiptInfo.imagePreview || receiptInfo.imageUrl}
+              alt="영수증 미리보기"
+              className="mb-4 h-48 w-full rounded-2xl object-contain bg-muted"
+            />
+          )}
           <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
             <MapPin className="w-4 h-4" />
             <span>{receiptInfo.location}</span>
@@ -71,6 +78,17 @@ export default function OcrResultScreen({
           </div>
         </div>
       </div>
+
+      {receiptInfo.rawText && (
+        <div className="px-4 pb-4">
+          <div className="bg-card rounded-2xl p-5 shadow-sm border border-border">
+            <h4 className="text-sm font-semibold text-muted-foreground mb-3">OCR 결과 텍스트</h4>
+            <pre className="max-h-44 overflow-auto whitespace-pre-wrap text-sm text-foreground">
+              {receiptInfo.rawText}
+            </pre>
+          </div>
+        </div>
+      )}
 
       {/* Menu Items */}
       <div className="flex-1 px-4 pb-4">

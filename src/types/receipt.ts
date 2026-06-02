@@ -3,6 +3,9 @@ export interface ReceiptInfo {
   location: string
   visitedAt: string
   summaryDate: string
+  imagePreview?: string
+  imageUrl?: string
+  rawText?: string
 }
 
 export interface MenuItem {
