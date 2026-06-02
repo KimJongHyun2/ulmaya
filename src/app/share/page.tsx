@@ -4,11 +4,10 @@ import { useRouter } from "next/navigation"
 import MobileAppShell from "@/components/common/mobile-app-shell"
 import KakaoShareScreen from "@/components/share/kakao-share-screen"
 import { useSettlementFlow } from "@/features/settlement/flow-context"
-import { RECEIPT_INFO } from "@/lib/mock-data"
 
 export default function SharePage() {
   const router = useRouter()
-  const { settlements, markSent, resetFlow } = useSettlementFlow()
+  const { settlements, receiptInfo, markSent, resetFlow } = useSettlementFlow()
 
   const handleDone = () => {
     resetFlow()
@@ -18,7 +17,7 @@ export default function SharePage() {
   return (
     <MobileAppShell>
       <KakaoShareScreen
-        receiptInfo={RECEIPT_INFO}
+        receiptInfo={receiptInfo}
         settlements={settlements}
         onSendComplete={markSent}
         onBack={() => router.push("/result")}
