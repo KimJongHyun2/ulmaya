@@ -9,19 +9,19 @@ out/
 build/
 
 # Environment variables
-# 반드시 .env* 패턴을 사용하여 모든 환경변수 파일이 보호되도록 합니다.
+# Keep environment files out of source control.
 .env*
 .local
 *.local
 
-# Debug
+# Debug logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
 # Vercel
-.vercel
+.vercel/
 
 # Project specific
 .snowflake/
@@ -32,3 +32,9 @@ __v0_jsx-dev-runtime.ts
 next.user-config.*
 next-env.d.ts
 *.tsbuildinfo
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
