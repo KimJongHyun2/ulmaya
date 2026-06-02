@@ -4,9 +4,8 @@ import { useEffect } from "react"
 import { useRouter } from "next/navigation"
 import MobileAppShell from "@/components/common/mobile-app-shell"
 import ParticipantScreen from "@/components/participants/participant-screen"
-import { useSettlementFlow } from "@/features/settlement/flow-context"
 import { useUser } from "@/features/auth/user-context"
-import { DUMMY_FRIENDS, FREQUENT_FRIENDS } from "@/lib/mock-data"
+import { useSettlementFlow } from "@/features/settlement/flow-context"
 import type { Participant } from "@/types/participants"
 
 export default function ParticipantsPage() {
@@ -15,23 +14,22 @@ export default function ParticipantsPage() {
   const { selectedParticipants, setSelectedParticipants } = useSettlementFlow()
 
   useEffect(() => {
-    // If user is logged in and no participants are selected yet, add the user as "Me"
     if (user && selectedParticipants.length === 0) {
       const me: Participant = {
-        id: user.id, // Use Kakao ID
+        id: user.id,
         name: `${user.nickname} (나)`,
-        avatar: "👤", // Default avatar for me
+        avatar: "🙂",
         imageUrl: user.profile_image,
       }
       setSelectedParticipants([me])
     }
-  }, [user, setSelectedParticipants, selectedParticipants.length])
+  }, [user, selectedParticipants.length, setSelectedParticipants])
 
   return (
     <MobileAppShell>
       <ParticipantScreen
-        allParticipants={DUMMY_FRIENDS}
-        frequentParticipants={FREQUENT_FRIENDS}
+        allParticipants={[]}
+        frequentParticipants={[]}
         selectedParticipants={selectedParticipants}
         setSelectedParticipants={setSelectedParticipants}
         onBack={() => router.push("/receipt")}

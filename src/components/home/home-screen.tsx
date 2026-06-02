@@ -1,9 +1,9 @@
 "use client"
 
-import { Camera, ImageIcon, Receipt, LogOut, MessageCircle } from "lucide-react"
-import { useUser } from "@/features/auth/user-context"
-import { loginWithKakao } from "@/lib/kakao"
+import { Camera, ImageIcon, LogOut, MessageCircle, Receipt } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/common/ui/avatar"
+import { useUser } from "@/features/auth/user-context"
+import { getKakaoProfile, loginWithKakao, logoutFromKakao } from "@/lib/kakao"
 
 interface HomeScreenProps {
   onCameraClick: () => void
@@ -15,33 +15,36 @@ export default function HomeScreen({ onCameraClick, onUploadClick }: HomeScreenP
 
   const handleLogin = async () => {
     setIsLoading(true)
+
     try {
-      const res: any = await loginWithKakao()
-      setUser({
-        id: res.id,
-        nickname: res.properties.nickname,
-        profile_image: res.properties.profile_image,
-      })
+      const kakaoUser = await loginWithKakao()
+      setUser(getKakaoProfile(kakaoUser))
     } catch (error) {
-      console.error("Login failed", error)
+      console.error("Kakao login failed", error)
+      alert("카카오 로그인에 실패했습니다. 카카오 앱 설정과 JavaScript 키를 확인해주세요.")
     } finally {
       setIsLoading(false)
     }
   }
 
-  const handleLogout = () => {
-    logout()
+  const handleLogout = async () => {
+    try {
+      await logoutFromKakao()
+    } catch (error) {
+      console.error("Kakao logout failed", error)
+    } finally {
+      logout()
+    }
   }
 
   return (
     <div className="flex flex-col min-h-screen px-6 py-8">
-      {/* Header & Profile */}
       <div className="flex items-center justify-between pt-4 mb-8">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
             <Receipt className="w-5 h-5 text-primary-foreground" />
           </div>
-          <span className="font-bold text-xl text-foreground">얼마야?</span>
+          <span className="font-bold text-xl text-foreground">얼마야</span>
         </div>
 
         {!isLoading && user && (
@@ -60,15 +63,12 @@ export default function HomeScreen({ onCameraClick, onUploadClick }: HomeScreenP
         )}
       </div>
 
-
-      {/* Tagline */}
       <div className="text-center mb-8">
         <p className="text-lg text-muted-foreground">
           영수증 한 장으로 정산 끝
         </p>
       </div>
 
-      {/* Illustration Area */}
       <div className="flex-1 flex items-center justify-center mb-12">
         <div className="relative w-48 h-64">
           <div className="absolute inset-0 bg-gradient-to-br from-primary/20 to-primary/5 rounded-3xl" />
@@ -83,7 +83,6 @@ export default function HomeScreen({ onCameraClick, onUploadClick }: HomeScreenP
         </div>
       </div>
 
-      {/* Main Action Buttons */}
       <div className="space-y-4 pb-8">
         {!user ? (
           <button
@@ -101,7 +100,7 @@ export default function HomeScreen({ onCameraClick, onUploadClick }: HomeScreenP
               className="w-full py-5 px-6 bg-primary text-primary-foreground rounded-2xl font-semibold text-lg flex items-center justify-center gap-3 shadow-lg shadow-primary/20 active:scale-[0.98] transition-transform"
             >
               <Camera className="w-6 h-6" />
-              영수증 찍기
+              영수증 촬영하기
             </button>
 
             <button
