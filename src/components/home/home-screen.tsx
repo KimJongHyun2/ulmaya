@@ -1,9 +1,9 @@
 "use client"
 
-import { Camera, ImageIcon, LogOut, MessageCircle, Receipt } from "lucide-react"
+import { Camera, ImageIcon, LogOut, Receipt } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/common/ui/avatar"
 import { useUser } from "@/features/auth/user-context"
-import { getKakaoProfile, loginWithKakao, logoutFromKakao } from "@/lib/kakao"
+import { logoutFromKakao } from "@/lib/kakao"
 
 interface HomeScreenProps {
   onCameraClick: () => void
@@ -11,21 +11,7 @@ interface HomeScreenProps {
 }
 
 export default function HomeScreen({ onCameraClick, onUploadClick }: HomeScreenProps) {
-  const { user, setUser, isLoading, setIsLoading, logout } = useUser()
-
-  const handleLogin = async () => {
-    setIsLoading(true)
-
-    try {
-      const kakaoUser = await loginWithKakao()
-      setUser(getKakaoProfile(kakaoUser))
-    } catch (error) {
-      console.error("Kakao login failed", error)
-      alert("카카오 로그인에 실패했습니다. 카카오 앱 설정과 JavaScript 키를 확인해주세요.")
-    } finally {
-      setIsLoading(false)
-    }
-  }
+  const { user, isLoading, logout } = useUser()
 
   const handleLogout = async () => {
     try {
@@ -84,34 +70,21 @@ export default function HomeScreen({ onCameraClick, onUploadClick }: HomeScreenP
       </div>
 
       <div className="space-y-4 pb-8">
-        {!user ? (
-          <button
-            onClick={handleLogin}
-            disabled={isLoading}
-            className="w-full py-5 px-6 bg-[#FEE500] text-[#191919] rounded-2xl font-bold text-lg flex items-center justify-center gap-3 shadow-lg shadow-yellow-400/20 active:scale-[0.98] transition-transform disabled:opacity-50"
-          >
-            <MessageCircle className="w-6 h-6 fill-current" />
-            {isLoading ? "연결 중..." : "카카오로 시작하기"}
-          </button>
-        ) : (
-          <>
-            <button
-              onClick={onCameraClick}
-              className="w-full py-5 px-6 bg-primary text-primary-foreground rounded-2xl font-semibold text-lg flex items-center justify-center gap-3 shadow-lg shadow-primary/20 active:scale-[0.98] transition-transform"
-            >
-              <Camera className="w-6 h-6" />
-              영수증 촬영하기
-            </button>
+        <button
+          onClick={onCameraClick}
+          className="w-full py-5 px-6 bg-primary text-primary-foreground rounded-2xl font-semibold text-lg flex items-center justify-center gap-3 shadow-lg shadow-primary/20 active:scale-[0.98] transition-transform"
+        >
+          <Camera className="w-6 h-6" />
+          영수증 촬영하기
+        </button>
 
-            <button
-              onClick={onUploadClick}
-              className="w-full py-5 px-6 bg-card text-foreground rounded-2xl font-semibold text-lg flex items-center justify-center gap-3 border-2 border-border active:scale-[0.98] transition-transform"
-            >
-              <ImageIcon className="w-6 h-6" />
-              사진 올리기
-            </button>
-          </>
-        )}
+        <button
+          onClick={onUploadClick}
+          className="w-full py-5 px-6 bg-card text-foreground rounded-2xl font-semibold text-lg flex items-center justify-center gap-3 border-2 border-border active:scale-[0.98] transition-transform"
+        >
+          <ImageIcon className="w-6 h-6" />
+          사진 올리기
+        </button>
       </div>
     </div>
   )
