@@ -6,6 +6,7 @@ export interface ReceiptInfo {
   imagePreview?: string
   imageUrl?: string
   rawText?: string
+  totalAmount?: number
 }
 
 export interface MenuItem {

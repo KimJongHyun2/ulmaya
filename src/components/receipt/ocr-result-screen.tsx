@@ -33,6 +33,7 @@ export default function OcrResultScreen({
   const location = isUnknown(receiptInfo.location) ? "주소 확인 필요" : receiptInfo.location
   const visitedAt = isUnknown(receiptInfo.visitedAt) ? "날짜/시간 확인 필요" : receiptInfo.visitedAt
   const rawText = receiptInfo.rawText?.trim() ?? ""
+  const totalAmount = receiptInfo.totalAmount ?? 0
 
   const startEditing = (item: MenuItem) => {
     setEditingId(item.id)
@@ -88,6 +89,12 @@ export default function OcrResultScreen({
               <Calendar className="mt-0.5 h-4 w-4 shrink-0" />
               <span>{visitedAt}</span>
             </div>
+            {totalAmount > 0 && (
+              <div className="flex items-center justify-between rounded-xl bg-muted/40 px-3 py-2 text-foreground">
+                <span className="font-semibold">총금액</span>
+                <span className="font-bold">{totalAmount.toLocaleString()}원</span>
+              </div>
+            )}
           </div>
         </section>
 

@@ -15,15 +15,44 @@ const IGNORE_KEYWORDS = [
   "\uC2B9\uC778",
   "\uCE74\uB4DC",
   "\uBD80\uAC00\uC138",
+  "\uBD09\uC0AC\uB8CC",
   "\uACFC\uC138",
   "\uBA74\uC138",
+  "\uC18C\uACC4",
+  "\uC21C\uB9E4\uCD9C",
   "\uD569\uACC4",
+  "\uB9E4\uCD9C\uD569\uACC4",
+  "\uACB0\uC81C\uAE08\uC561",
   "\uCD1D\uC561",
+  "\uCD1D\uAE08\uC561",
+  "\uAE08\uC561",
   "\uBC1B\uC744\uAE08\uC561",
   "\uBC1B\uC740\uAE08\uC561",
+  "\uBC30\uB2EC\uB8CC",
+  "\uBC30\uB2EC\uBE44",
+  "\uC120\uACB0\uC81C",
+  "\uC804\uD654",
+  "\uC804\uD654\uBC88\uD638",
+  "\uC8FC\uC18C",
+  "\uC8FC\uBB38\uBC88\uD638",
+  "\uD14C\uC774\uBE14",
+  "\uD3EC\uC7A5",
+  "\uBC30\uB2EC",
+  "\uCE74\uB4DC\uBC88\uD638",
+  "\uC2B9\uC778\uBC88\uD638",
+  "\uD560\uBD80",
+  "\uBD09\uD22C",
+  "\uBE44\uB2D0\uBD09\uD22C",
+  "\uBCF4\uC99D\uAE08",
+  "\uC694\uCCAD\uC0AC\uD56D",
+  "\uB9E4\uC7A5\uBA85",
+  "\uB300\uD45C\uC790",
+  "\uC8FC\uBB38\uC77C\uC2DC",
+  "\uBC1C\uD589\uC77C\uC2DC",
   "vat",
   "tel",
 ]
+const FOOD_NAME_HINT_PATTERN = /(\uB3C8\uAE4C\uC2A4|\uB3C8\uAC00\uC2A4|\uB36E\uBC25|\uB9C8\uC694|\uCE58\uD0A8|\uC81C\uC721|\uAC00\uC2A4|\uAD6D\uBC25|\uCC0C\uAC1C|\uD0D5|\uBA74|\uBC25|\uAE40\uBC25|\uB77C\uBA74|\uC6B0\uB3D9|\uB0C9\uBA74|\uC2A4\uD14C\uC774\uD06C|\uD53C\uC790|\uD30C\uC2A4\uD0C0|\uBC84\uAC70|\uCEE4\uD53C|\uB77C\uB5BC|\uC8FC\uC2A4|\uC74C\uB8CC|\uC0D0\uB7EC\uB4DC|\uD280\uAE40|\uB9CC\uB450|\uC218\uC721|\uC591\uAF2C\uCE58|\uBD88\uACE0\uAE30|\uBE44\uBE54\uBC25|\uC625\uC218\uC218|\uC544\uC774\uC2A4\uD06C\uB9BC|\uD30C\uC778\uD2B8)/
 
 function normalizeText(value: string) {
   return value
@@ -58,14 +87,66 @@ function hasKorean(value: string) {
 }
 
 function hasMenuLikeText(value: string) {
-  return hasKorean(value) && !IGNORE_KEYWORDS.some((keyword) => value.toLowerCase().includes(keyword.toLowerCase()))
+  const compact = normalizeCompact(value)
+
+  if (!hasKorean(value)) {
+    return false
+  }
+
+  if (ADDRESS_HINT_PATTERN.test(value) || SALES_DATE_PATTERN.test(value) || /\d{2,4}[-)]?\d{3,4}[-]?\d{4}/.test(value)) {
+    return false
+  }
+
+  if (IGNORE_KEYWORDS.some((keyword) => compact.includes(normalizeCompact(keyword)))) {
+    return false
+  }
+
+  if (/^\d+$/.test(compact) || compact.length < 2) {
+    return false
+  }
+
+  return true
+}
+
+function isMetadataLine(value: string) {
+  const compact = normalizeCompact(value)
+  return IGNORE_KEYWORDS.some((keyword) => compact.includes(normalizeCompact(keyword)))
 }
 
 function cleanMenuName(value: string) {
   return normalizeText(value)
     .replace(/^\d+\s*/, "")
+    .replace(/\b\d+\s*$/, "")
     .replace(/\d{3,5}\s*$/, "")
+    .replace(/\b(?:ea|qty|cnt)\b/gi, "")
+    .replace(/(?:\uD589\uC0AC|\uD560\uC778|\uC99D\uC815)\s*$/g, "")
     .trim()
+}
+
+function isStrongMenuCandidate(name: string) {
+  const compact = normalizeCompact(name)
+  return FOOD_NAME_HINT_PATTERN.test(compact) || (hasMenuLikeText(name) && compact.length >= 3)
+}
+
+function parseFallbackMenuCandidates(lines: string[], totalAmount = 0) {
+  const items: MenuItem[] = []
+
+  lines.forEach((line) => {
+    const numbers = getNumbers(line)
+    const amount = pickAmount(numbers, totalAmount)
+    const candidateName =
+      numbers.length > 0
+        ? cleanMenuName(line.slice(0, numbers[0].index))
+        : cleanMenuName(line)
+
+    if (!FOOD_NAME_HINT_PATTERN.test(normalizeCompact(candidateName))) {
+      return
+    }
+
+    pushItem(items, candidateName, amount, { allowZeroPrice: true })
+  })
+
+  return items
 }
 
 function getNumbers(line: string) {
@@ -77,21 +158,39 @@ function getNumbers(line: string) {
   }))
 }
 
-function pickAmount(numbers: Array<{ value: number; hasThousandsSeparator: boolean }>) {
+function correctOcrPrice(value: number, totalAmount = 0) {
+  if (value < 50000 || value % 1000 !== 0) {
+    return value
+  }
+
+  const corrected = Math.round(value / 10)
+
+  if (corrected < 1000 || corrected > 50000) {
+    return value
+  }
+
+  if (totalAmount > 0) {
+    return value > totalAmount ? corrected : value
+  }
+
+  return value >= 100000 || value <= 99000 ? corrected : value
+}
+
+function pickAmount(numbers: Array<{ value: number; hasThousandsSeparator: boolean }>, totalAmount = 0) {
   const separatedCandidates = numbers
     .filter((number) => number.hasThousandsSeparator)
     .map((number) => number.value)
     .filter((value) => value >= 1000 && value <= 500000)
 
   if (separatedCandidates.length > 0) {
-    return separatedCandidates[separatedCandidates.length - 1]
+    return correctOcrPrice(separatedCandidates[separatedCandidates.length - 1], totalAmount)
   }
 
   const candidates = numbers
     .map((number) => number.value)
     .filter((value) => value >= 1000 && value <= 500000)
 
-  return candidates.length > 0 ? candidates[candidates.length - 1] : 0
+  return candidates.length > 0 ? correctOcrPrice(candidates[candidates.length - 1], totalAmount) : 0
 }
 
 function isLikelyAttachedProductCode(
@@ -129,15 +228,18 @@ function extractMenuLines(lines: string[]) {
   return section.length > 0 ? section : lines
 }
 
-function pushItem(items: MenuItem[], name: string, price: number) {
+function pushItem(items: MenuItem[], name: string, price: number, options: { allowZeroPrice?: boolean } = {}) {
   const cleanedName = cleanMenuName(name)
 
-  if (!hasMenuLikeText(cleanedName) || (price < 1000 && !/(\uBD09\uD22C|\uBCF4\uC99D\uAE08)/.test(cleanedName))) {
+  if (
+    !isStrongMenuCandidate(cleanedName) ||
+    (!options.allowZeroPrice && price < 1000 && !/(\uBD09\uD22C|\uBCF4\uC99D\uAE08)/.test(cleanedName))
+  ) {
     return
   }
 
   const normalizedName = cleanedName.replace(/\s+/g, " ")
-  const alreadyExists = items.some((item) => item.name === normalizedName && item.price === price)
+  const alreadyExists = items.some((item) => normalizeCompact(item.name) === normalizeCompact(normalizedName))
 
   if (alreadyExists) {
     return
@@ -153,14 +255,17 @@ function pushItem(items: MenuItem[], name: string, price: number) {
 }
 
 function parseReceiptTotal(rawText: string) {
-  const compact = normalizeCompact(rawText)
-  const totalMatch = compact.match(/(?:\uD569\uACC4|\uCD1D\uC561|total|w|₩)(\d{1,3}[,.]?\d{3,})/)
+  const totalLine = rawText
+    .split(/\r?\n/)
+    .map((line) => normalizeText(line))
+    .find((line) => /(\uCD1D\s*\uAE08\s*\uC561|\uCD1D\s*\uC561|\uD569\s*\uACC4|\uACB0\s*\uC81C\s*\uAE08\s*\uC561|total)/i.test(line))
+  const totalMatch = totalLine?.match(NUMBER_PATTERN)
 
   if (!totalMatch) {
     return 0
   }
 
-  const total = normalizePrice(totalMatch[1])
+  const total = normalizePrice(totalMatch[totalMatch.length - 1])
 
   if (total >= 100000 && total < 200000) {
     return total - 100000
@@ -279,6 +384,7 @@ export function parseReceiptInfoFromRawText(rawText: string, previousInfo: Recei
     visitedAt: parsedDate?.visitedAt ?? "\uBC29\uBB38\uC77C \uD655\uC778 \uD544\uC694",
     summaryDate: parsedDate?.summaryDate ?? previousInfo.summaryDate,
     rawText,
+    totalAmount: parseReceiptTotal(rawText) || previousInfo.totalAmount,
   }
 }
 
@@ -300,42 +406,66 @@ export function parseMenuItemsFromRawText(rawText: string): MenuItem[] {
     .map((line) => normalizeText(line))
     .filter(Boolean)
 
+  const totalAmount = parseReceiptTotal(rawText)
   const menuLines = extractMenuLines(lines)
   const items: MenuItem[] = []
-  let pendingName = ""
+  const pendingNames: string[] = []
 
   menuLines.forEach((line) => {
     if (MENU_END_PATTERN.test(line)) {
-      pendingName = ""
+      pendingNames.length = 0
+      return
+    }
+
+    if (isMetadataLine(line)) {
+      pendingNames.length = 0
+      return
+    }
+
+    if (!hasMenuLikeText(line) && getNumbers(line).length === 0) {
       return
     }
 
     const numbers = getNumbers(line)
-    const amount = pickAmount(numbers)
+    const amount = pickAmount(numbers, totalAmount)
     const textBeforeFirstNumber = numbers.length > 0 ? line.slice(0, numbers[0].index) : line
+    const textAfterLastNumber =
+      numbers.length > 0
+        ? line.slice((numbers[numbers.length - 1].index ?? 0) + numbers[numbers.length - 1].raw.length)
+        : ""
     const possibleInlineName = cleanMenuName(textBeforeFirstNumber)
+    const possibleTrailingName = cleanMenuName(textAfterLastNumber)
 
     if (isLikelyAttachedProductCode(line, numbers, possibleInlineName)) {
-      pendingName = possibleInlineName
+      pendingNames.push(possibleInlineName)
       return
     }
 
     if (amount > 0 && hasMenuLikeText(possibleInlineName)) {
       pushItem(items, possibleInlineName, amount)
-      pendingName = ""
+      pendingNames.length = 0
       return
     }
 
-    if (amount > 0 && pendingName) {
-      pushItem(items, pendingName, amount)
-      pendingName = ""
+    if (amount > 0 && hasMenuLikeText(possibleTrailingName)) {
+      pushItem(items, possibleTrailingName, amount)
+      pendingNames.length = 0
+      return
+    }
+
+    if (amount > 0 && pendingNames.length > 0) {
+      const nextName = pendingNames.shift()
+
+      if (nextName) {
+        pushItem(items, nextName, amount)
+      }
       return
     }
 
     if (hasMenuLikeText(line) && numbers.length === 0) {
-      pendingName = line
+      pendingNames.push(line)
     }
   })
 
-  return items
+  return items.length > 0 ? items : parseFallbackMenuCandidates(lines, totalAmount)
 }
