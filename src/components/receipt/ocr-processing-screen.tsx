@@ -1,22 +1,24 @@
 "use client"
 
 import { useRef, useState } from "react"
+import { useRouter } from "next/navigation"
 import { Check, Loader2, ScanText, Upload } from "lucide-react"
 import { useSettlementFlow } from "@/features/settlement/flow-context"
+import { parseMenuItemsFromRawText, parseReceiptInfoFromRawText } from "@/features/receipt/ocr"
 
 const steps = [
-  { id: 1, label: "이미지 업로드" },
-  { id: 2, label: "텍스트 추출" },
-  { id: 3, label: "OCR 결과 확인" },
+  { id: 1, label: "이미지 업로드 완료" },
+  { id: 2, label: "텍스트 추출 중" },
+  { id: 3, label: "메뉴 분석 중" },
 ]
 
 export default function OcrProcessingScreen() {
+  const router = useRouter()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const { receiptInfo, setReceiptInfo, isReady } = useSettlementFlow()
+  const { receiptInfo, setReceiptInfo, setMenuItems, isReady } = useSettlementFlow()
   const [currentStep, setCurrentStep] = useState(0)
   const [selectedImage, setSelectedImage] = useState<string>(receiptInfo.imagePreview ?? receiptInfo.imageUrl ?? "")
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
-  const [rawText, setRawText] = useState(receiptInfo.rawText ?? "")
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [errorMessage, setErrorMessage] = useState("")
 
@@ -31,7 +33,6 @@ export default function OcrProcessingScreen() {
     const preview = URL.createObjectURL(file)
     setSelectedFile(file)
     setSelectedImage(preview)
-    setRawText("")
     setReceiptInfo((prev) => ({
       ...prev,
       imagePreview: preview,
@@ -68,21 +69,23 @@ export default function OcrProcessingScreen() {
       }
 
       const nextRawText = data.rawText?.trim() ?? ""
-
-      setRawText(nextRawText)
-      setReceiptInfo((prev) => ({
-        ...prev,
-        imagePreview: selectedImage,
-        imageUrl: selectedImage,
-        rawText: nextRawText,
-      }))
+      const parsedReceiptInfo = parseReceiptInfoFromRawText(nextRawText, receiptInfo)
+      const parsedMenuItems = parseMenuItemsFromRawText(nextRawText)
 
       setCurrentStep(3)
+      setReceiptInfo((prev) => ({
+        ...parsedReceiptInfo,
+        imagePreview: selectedImage || prev.imagePreview,
+        imageUrl: selectedImage || prev.imageUrl,
+        rawText: nextRawText,
+      }))
+      setMenuItems(parsedMenuItems)
+
       console.log("Clova OCR raw text:", nextRawText)
+      router.push("/receipt")
     } catch (error) {
       console.error("OCR analysis failed", error)
       setErrorMessage(error instanceof Error ? error.message : "OCR 분석에 실패했습니다.")
-    } finally {
       setIsAnalyzing(false)
     }
   }
@@ -93,6 +96,64 @@ export default function OcrProcessingScreen() {
         <div className="flex items-center gap-3 text-muted-foreground">
           <Loader2 className="h-5 w-5 animate-spin" />
           세션 준비 중...
+        </div>
+      </div>
+    )
+  }
+
+  if (isAnalyzing) {
+    return (
+      <div className="flex min-h-screen flex-col px-6 py-12">
+        <h2 className="text-center text-xl font-bold text-foreground">OCR 분석 중...</h2>
+
+        <div className="flex flex-1 flex-col items-center justify-center gap-10">
+          <div className="w-56 rounded-2xl border border-border bg-card px-8 py-10 shadow-lg">
+            <div className="space-y-4">
+              <div className="h-4 rounded bg-muted" />
+              <div className="h-4 w-2/3 rounded bg-muted" />
+              <div className="h-px bg-border" />
+              <div className="grid grid-cols-2 gap-x-10 gap-y-3">
+                {Array.from({ length: 10 }).map((_, index) => (
+                  <div key={index} className="h-3 rounded bg-muted" />
+                ))}
+              </div>
+              <div className="h-px bg-border" />
+              <div className="flex justify-between">
+                <div className="h-4 w-14 rounded bg-muted" />
+                <div className="h-4 w-16 rounded bg-muted" />
+              </div>
+            </div>
+          </div>
+
+          <div className="w-full max-w-sm space-y-4">
+            {steps.map((step) => (
+              <div
+                key={step.id}
+                className={`flex items-center gap-4 rounded-2xl px-4 py-4 ${
+                  currentStep >= step.id ? "bg-primary/10" : "bg-muted/50"
+                }`}
+              >
+                <div
+                  className={`flex h-9 w-9 items-center justify-center rounded-full ${
+                    currentStep > step.id
+                      ? "bg-primary text-primary-foreground"
+                      : currentStep === step.id
+                        ? "bg-primary/80 text-primary-foreground"
+                        : "bg-background text-muted-foreground"
+                  }`}
+                >
+                  {currentStep > step.id ? (
+                    <Check className="h-4 w-4" />
+                  ) : currentStep === step.id ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <span className="text-sm">{step.id}</span>
+                  )}
+                </div>
+                <span className="font-semibold text-foreground">{step.label}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     )
@@ -142,48 +203,17 @@ export default function OcrProcessingScreen() {
           <button
             type="button"
             onClick={handleAnalyze}
-            disabled={!selectedFile || isAnalyzing}
+            disabled={!selectedFile}
             className="flex items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-4 font-semibold text-primary-foreground disabled:opacity-50"
           >
-            {isAnalyzing ? <Loader2 className="h-5 w-5 animate-spin" /> : <ScanText className="h-5 w-5" />}
+            <ScanText className="h-5 w-5" />
             OCR 분석하기
           </button>
-        </div>
-
-        <div className="space-y-3">
-          {steps.map((step) => (
-            <div
-              key={step.id}
-              className={`flex items-center gap-3 rounded-xl p-3 ${currentStep >= step.id ? "bg-primary/10" : "bg-muted/50"}`}
-            >
-              <div className={`flex h-8 w-8 items-center justify-center rounded-full ${currentStep >= step.id ? "bg-primary" : "bg-muted"}`}>
-                {currentStep > step.id ? (
-                  <Check className="h-4 w-4 text-primary-foreground" />
-                ) : currentStep === step.id ? (
-                  <Loader2 className="h-4 w-4 animate-spin text-primary-foreground" />
-                ) : (
-                  <span className="text-xs text-muted-foreground">{step.id}</span>
-                )}
-              </div>
-              <span className={`text-sm font-medium ${currentStep >= step.id ? "text-foreground" : "text-muted-foreground"}`}>
-                {step.label}
-              </span>
-            </div>
-          ))}
         </div>
 
         {errorMessage && (
           <div className="rounded-2xl border border-destructive/20 bg-destructive/10 p-4 text-sm text-destructive">
             {errorMessage}
-          </div>
-        )}
-
-        {rawText && (
-          <div className="rounded-3xl border border-border bg-card p-4 shadow-sm">
-            <h3 className="mb-2 font-semibold text-foreground">OCR 원문 텍스트</h3>
-            <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-2xl bg-muted p-3 text-xs text-muted-foreground">
-              {rawText}
-            </pre>
           </div>
         )}
       </div>
