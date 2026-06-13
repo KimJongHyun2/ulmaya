@@ -1,68 +1,21 @@
 "use client"
 
 import { useRef, useState } from "react"
-import { useRouter } from "next/navigation"
 import { Check, Loader2, ScanText, Upload } from "lucide-react"
-import { createWorker } from "tesseract.js"
 import { useSettlementFlow } from "@/features/settlement/flow-context"
-import { parseMenuItemsFromRawText, parseReceiptInfoFromRawText } from "@/features/receipt/ocr"
 
 const steps = [
   { id: 1, label: "이미지 업로드" },
   { id: 2, label: "텍스트 추출" },
-  { id: 3, label: "메뉴 자동 생성" },
+  { id: 3, label: "OCR 결과 확인" },
 ]
 
-function loadImage(src: string) {
-  return new Promise<HTMLImageElement>((resolve, reject) => {
-    const image = new Image()
-    image.onload = () => resolve(image)
-    image.onerror = reject
-    image.src = src
-  })
-}
-
-async function preprocessReceiptImage(src: string) {
-  const image = await loadImage(src)
-  const maxWidth = 1800
-  const scale = image.width < 1200 ? 2 : Math.min(1, maxWidth / image.width)
-  const width = Math.round(image.width * scale)
-  const height = Math.round(image.height * scale)
-  const canvas = document.createElement("canvas")
-  const context = canvas.getContext("2d")
-
-  if (!context) {
-    return src
-  }
-
-  canvas.width = width
-  canvas.height = height
-  context.fillStyle = "#ffffff"
-  context.fillRect(0, 0, width, height)
-  context.drawImage(image, 0, 0, width, height)
-
-  const imageData = context.getImageData(0, 0, width, height)
-  const { data } = imageData
-
-  for (let i = 0; i < data.length; i += 4) {
-    const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114
-    const contrasted = Math.max(0, Math.min(255, (gray - 128) * 1.55 + 128))
-    const value = contrasted < 170 ? 0 : 255
-    data[i] = value
-    data[i + 1] = value
-    data[i + 2] = value
-  }
-
-  context.putImageData(imageData, 0, 0)
-  return canvas.toDataURL("image/png")
-}
-
 export default function OcrProcessingScreen() {
-  const router = useRouter()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const { receiptInfo, setReceiptInfo, setMenuItems, isReady } = useSettlementFlow()
+  const { receiptInfo, setReceiptInfo, isReady } = useSettlementFlow()
   const [currentStep, setCurrentStep] = useState(0)
   const [selectedImage, setSelectedImage] = useState<string>(receiptInfo.imagePreview ?? receiptInfo.imageUrl ?? "")
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [rawText, setRawText] = useState(receiptInfo.rawText ?? "")
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [errorMessage, setErrorMessage] = useState("")
@@ -76,18 +29,21 @@ export default function OcrProcessingScreen() {
     if (!file) return
 
     const preview = URL.createObjectURL(file)
+    setSelectedFile(file)
     setSelectedImage(preview)
+    setRawText("")
     setReceiptInfo((prev) => ({
       ...prev,
       imagePreview: preview,
       imageUrl: preview,
+      rawText: "",
     }))
     setCurrentStep(1)
     setErrorMessage("")
   }
 
   const handleAnalyze = async () => {
-    if (!selectedImage) {
+    if (!selectedFile) {
       setErrorMessage("이미지를 먼저 선택해주세요.")
       return
     }
@@ -97,32 +53,35 @@ export default function OcrProcessingScreen() {
     setErrorMessage("")
 
     try {
-      const worker = await createWorker("kor+eng")
-      const ocrImage = await preprocessReceiptImage(selectedImage).catch(() => selectedImage)
-      const result = await worker.recognize(ocrImage)
-      await worker.terminate()
+      const formData = new FormData()
+      formData.append("image", selectedFile)
 
-      const nextRawText = result.data.text.trim()
-      const parsedMenuItems = parseMenuItemsFromRawText(nextRawText)
-      const parsedReceiptInfo = parseReceiptInfoFromRawText(nextRawText, receiptInfo)
+      const response = await fetch("/api/ocr/clova", {
+        method: "POST",
+        body: formData,
+      })
+
+      const data = (await response.json()) as { rawText?: string; message?: string }
+
+      if (!response.ok) {
+        throw new Error(data.message ?? "Clova OCR request failed.")
+      }
+
+      const nextRawText = data.rawText?.trim() ?? ""
 
       setRawText(nextRawText)
       setReceiptInfo((prev) => ({
-        ...parsedReceiptInfo,
+        ...prev,
         imagePreview: selectedImage,
         imageUrl: selectedImage,
         rawText: nextRawText,
       }))
 
-      if (parsedMenuItems.length > 0) {
-        setMenuItems(parsedMenuItems)
-      }
-
       setCurrentStep(3)
-      router.push("/receipt")
+      console.log("Clova OCR raw text:", nextRawText)
     } catch (error) {
       console.error("OCR analysis failed", error)
-      setErrorMessage("OCR 분석에 실패했습니다. 영수증을 더 밝고 정면에 가깝게 찍어 다시 시도해주세요.")
+      setErrorMessage(error instanceof Error ? error.message : "OCR 분석에 실패했습니다.")
     } finally {
       setIsAnalyzing(false)
     }
@@ -183,7 +142,7 @@ export default function OcrProcessingScreen() {
           <button
             type="button"
             onClick={handleAnalyze}
-            disabled={!selectedImage || isAnalyzing}
+            disabled={!selectedFile || isAnalyzing}
             className="flex items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-4 font-semibold text-primary-foreground disabled:opacity-50"
           >
             {isAnalyzing ? <Loader2 className="h-5 w-5 animate-spin" /> : <ScanText className="h-5 w-5" />}
@@ -221,7 +180,7 @@ export default function OcrProcessingScreen() {
 
         {rawText && (
           <div className="rounded-3xl border border-border bg-card p-4 shadow-sm">
-            <h3 className="mb-2 font-semibold text-foreground">OCR 결과 텍스트</h3>
+            <h3 className="mb-2 font-semibold text-foreground">OCR 원문 텍스트</h3>
             <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-2xl bg-muted p-3 text-xs text-muted-foreground">
               {rawText}
             </pre>
