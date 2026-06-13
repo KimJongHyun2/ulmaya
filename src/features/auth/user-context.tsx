@@ -4,7 +4,9 @@ import { createContext, useContext, useState, useEffect, type ReactNode } from "
 
 interface User {
   id: number
+  kakao_id?: string
   nickname: string
+  email?: string
   profile_image?: string
 }
 
@@ -22,27 +24,22 @@ export function UserProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
-  // Load user from localStorage on mount
   useEffect(() => {
-    const savedUser = localStorage.getItem("ulmaya_user")
-    if (savedUser) {
+    const loadSession = async () => {
       try {
-        setUser(JSON.parse(savedUser))
-      } catch (e) {
-        console.error("Failed to parse saved user", e)
+        const response = await fetch("/api/auth/me", { cache: "no-store" })
+        const data = (await response.json()) as { user: User | null }
+        setUser(data.user)
+      } catch (error) {
+        console.error("Failed to load auth session", error)
+        setUser(null)
+      } finally {
+        setIsLoading(false)
       }
     }
-    setIsLoading(false)
-  }, [])
 
-  // Save user to localStorage when changed
-  useEffect(() => {
-    if (user) {
-      localStorage.setItem("ulmaya_user", JSON.stringify(user))
-    } else {
-      localStorage.removeItem("ulmaya_user")
-    }
-  }, [user])
+    void loadSession()
+  }, [])
 
   const logout = () => {
     setUser(null)

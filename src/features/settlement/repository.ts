@@ -1,12 +1,8 @@
-import { collection, doc, getDoc, setDoc, updateDoc } from "firebase/firestore"
-import { getFirestoreDb } from "@/lib/firebase"
 import type {
   SettlementSession,
   SettlementSessionCreateInput,
   SettlementSessionPatch,
 } from "@/types/session"
-
-const COLLECTION_NAME = "settlementSessions"
 
 const memorySessions = new Map<string, SettlementSession>()
 
@@ -14,25 +10,8 @@ function cloneSession(session: SettlementSession): SettlementSession {
   return JSON.parse(JSON.stringify(session)) as SettlementSession
 }
 
-function getCollectionRef() {
-  const db = getFirestoreDb()
-
-  if (!db) {
-    return null
-  }
-
-  return collection(db, COLLECTION_NAME)
-}
-
 async function persistSession(session: SettlementSession) {
-  const collectionRef = getCollectionRef()
-
-  if (!collectionRef) {
-    memorySessions.set(session.id, cloneSession(session))
-    return session
-  }
-
-  await setDoc(doc(collectionRef, session.id), session)
+  memorySessions.set(session.id, cloneSession(session))
   return session
 }
 
@@ -58,19 +37,7 @@ export async function createSettlementSession(input: SettlementSessionCreateInpu
 }
 
 export async function loadSettlementSession(sessionId: string) {
-  const collectionRef = getCollectionRef()
-
-  if (!collectionRef) {
-    return memorySessions.has(sessionId) ? cloneSession(memorySessions.get(sessionId)!) : null
-  }
-
-  const snapshot = await getDoc(doc(collectionRef, sessionId))
-
-  if (!snapshot.exists()) {
-    return null
-  }
-
-  return snapshot.data() as SettlementSession
+  return memorySessions.has(sessionId) ? cloneSession(memorySessions.get(sessionId)!) : null
 }
 
 export async function updateSettlementSession(
@@ -89,18 +56,7 @@ export async function updateSettlementSession(
     updatedAt: patch.updatedAt ?? Date.now(),
   }
 
-  const collectionRef = getCollectionRef()
-
-  if (!collectionRef) {
-    memorySessions.set(sessionId, cloneSession(nextSession))
-    return nextSession
-  }
-
-  await updateDoc(doc(collectionRef, sessionId), {
-    ...patch,
-    updatedAt: nextSession.updatedAt,
-  })
-
+  memorySessions.set(sessionId, cloneSession(nextSession))
   return nextSession
 }
 

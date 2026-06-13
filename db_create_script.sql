@@ -1,5 +1,5 @@
--- Firestore -> Relational mapping summary
--- settlementSessions (single Firestore document) maps to:
+-- Relational mapping summary
+-- settlement sessions map to:
 -- settlement_room: one session/room per receipt flow
 -- participant: all selected participants in the session
 -- menu_item: OCR or edited menu rows in the receipt
@@ -8,7 +8,7 @@
 
 CREATE TABLE settlement_room (
   settlement_room_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  firestore_session_id VARCHAR(128) NOT NULL UNIQUE,
+  session_id VARCHAR(128) NOT NULL UNIQUE,
   store_name VARCHAR(255) NOT NULL,
   location VARCHAR(255) NOT NULL,
   visited_at VARCHAR(50) NOT NULL,

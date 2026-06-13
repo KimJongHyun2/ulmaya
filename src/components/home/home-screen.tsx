@@ -1,9 +1,8 @@
 "use client"
 
-import { Camera, ImageIcon, LogOut, Receipt } from "lucide-react"
+import { Camera, ImageIcon, LogIn, LogOut, Receipt } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/common/ui/avatar"
 import { useUser } from "@/features/auth/user-context"
-import { logoutFromKakao } from "@/lib/kakao"
 
 interface HomeScreenProps {
   onCameraClick: () => void
@@ -15,12 +14,12 @@ export default function HomeScreen({ onCameraClick, onUploadClick }: HomeScreenP
 
   const handleLogout = async () => {
     try {
-      await logoutFromKakao()
+      await fetch("/api/auth/logout", { method: "POST" })
     } catch (error) {
-      console.error("Kakao logout failed", error)
-    } finally {
-      logout()
+      console.error("Session logout failed", error)
     }
+
+    logout()
   }
 
   return (
@@ -46,6 +45,15 @@ export default function HomeScreen({ onCameraClick, onUploadClick }: HomeScreenP
               <AvatarFallback>{user.nickname[0]}</AvatarFallback>
             </Avatar>
           </div>
+        )}
+
+        {!isLoading && !user && (
+          <a
+            href="/api/auth/kakao/login"
+            className="text-sm font-semibold text-foreground flex items-center gap-1"
+          >
+            카카오 로그인 <LogIn className="w-4 h-4" />
+          </a>
         )}
       </div>
 

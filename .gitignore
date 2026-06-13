@@ -11,6 +11,8 @@ build/
 # Environment variables
 # Keep environment files out of source control.
 .env*
+!.env.example
+!.env.local.example
 .local
 *.local
 
