@@ -1,13 +1,18 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { ArrowLeft, Check, Link2, MessageCircle, Search, Users } from "lucide-react"
+import { ArrowLeft, Check, Link2, MessageCircle, Search, UserPlus, Users } from "lucide-react"
 import {
   filterParticipants,
   isParticipantSelected,
   toggleParticipant as toggleParticipantSelection,
 } from "@/features/participants/selection"
-import { getKakaoFriends, getKakaoProfile, loginWithKakao, type KakaoFriendResponse } from "@/lib/kakao"
+import {
+  getKakaoFriends,
+  getKakaoProfile,
+  loginWithKakao,
+  type KakaoFriendResponse,
+} from "@/lib/kakao"
 import { useUser } from "@/features/auth/user-context"
 import type { Participant } from "@/types/participants"
 
@@ -20,6 +25,17 @@ interface ParticipantScreenProps {
   onNext: () => void
 }
 
+const DEFAULT_PARTICIPANT: Participant = {
+  id: 0,
+  name: "종현 (나)",
+  avatar: "나",
+}
+
+const EMPTY_FRIENDS_MESSAGE =
+  "불러올 수 있는 카카오 친구가 없습니다. 친구가 이 앱에 연결되어 있지 않거나 friends 동의가 필요할 수 있습니다."
+const FRIENDS_LOAD_ERROR_MESSAGE =
+  "카카오 친구 목록을 불러오지 못했습니다. 직접 추가로 참여자를 등록해주세요."
+
 function stableNumberId(value: string) {
   let hash = 0
 
@@ -30,29 +46,40 @@ function stableNumberId(value: string) {
   return 1_000_000_000 + (hash % 1_000_000_000)
 }
 
+function isDefaultParticipant(participant: Participant) {
+  return participant.id === DEFAULT_PARTICIPANT.id || participant.name === DEFAULT_PARTICIPANT.name
+}
+
+function dedupeParticipants(participants: Participant[]) {
+  const seenIds = new Set<number>()
+  const seenNames = new Set<string>()
+
+  return participants.filter((participant) => {
+    const normalizedName = participant.name.trim().toLowerCase()
+
+    if (!participant.name.trim() || seenIds.has(participant.id) || seenNames.has(normalizedName)) {
+      return false
+    }
+
+    seenIds.add(participant.id)
+    seenNames.add(normalizedName)
+    return true
+  })
+}
+
+function mergeParticipants(current: Participant[], incoming: Participant[]) {
+  return dedupeParticipants([...current, ...incoming])
+}
+
 function mapFriendToParticipant(friend: KakaoFriendResponse): Participant {
   const stableId = friend.id ?? stableNumberId(friend.uuid ?? friend.profile_nickname ?? crypto.randomUUID())
 
   return {
     id: stableId,
-    name: friend.profile_nickname ?? "카카오 친구",
-    avatar: "👤",
+    name: friend.profile_nickname?.trim() || "카카오 친구",
+    avatar: "친",
     imageUrl: friend.profile_thumbnail_image,
   }
-}
-
-function getKakaoErrorMessage(error: any) {
-  const code = error?.code
-
-  if (code === -402) {
-    return "카카오 친구 목록 권한이 필요합니다. 카카오 디벨로퍼스에서 friends 권한을 활성화하고 다시 로그인해주세요."
-  }
-
-  if (code === -401) {
-    return "카카오 로그인이 만료되었습니다. 다시 로그인한 뒤 친구를 불러와주세요."
-  }
-
-  return "카카오 친구 목록을 불러오지 못했습니다. 앱 권한과 JavaScript 키 설정을 확인해주세요."
 }
 
 export default function ParticipantScreen({
@@ -63,108 +90,171 @@ export default function ParticipantScreen({
   onBack,
   onNext,
 }: ParticipantScreenProps) {
-  const { user, setUser } = useUser()
+  const { setUser } = useUser()
   const [searchQuery, setSearchQuery] = useState("")
+  const [manualName, setManualName] = useState("")
   const [isSyncing, setIsSyncing] = useState(false)
-  const [allParticipants, setAllParticipants] = useState<Participant[]>(initialParticipants)
+  const [allParticipants, setAllParticipants] = useState<Participant[]>(() =>
+    dedupeParticipants(initialParticipants),
+  )
   const [syncMessage, setSyncMessage] = useState("")
 
   useEffect(() => {
-    setAllParticipants(initialParticipants)
+    setAllParticipants((current) => mergeParticipants(current, initialParticipants))
   }, [initialParticipants])
 
+  useEffect(() => {
+    if (!selectedParticipants.some(isDefaultParticipant)) {
+      setSelectedParticipants([DEFAULT_PARTICIPANT, ...selectedParticipants])
+    }
+  }, [selectedParticipants, setSelectedParticipants])
+
   const handleSyncKakaoFriends = async () => {
+    if (isSyncing) {
+      return
+    }
+
     setIsSyncing(true)
     setSyncMessage("")
 
     try {
-      if (!user) {
-        const loggedInUser = await loginWithKakao()
-        setUser(getKakaoProfile(loggedInUser))
-      }
+      const loggedInUser = await loginWithKakao()
+      setUser(getKakaoProfile(loggedInUser))
 
       const friends = await getKakaoFriends()
-      const kakaoParticipants = friends.map(mapFriendToParticipant)
+      const kakaoParticipants = dedupeParticipants(friends.map(mapFriendToParticipant))
 
-      setAllParticipants(kakaoParticipants)
+      setAllParticipants((current) => mergeParticipants(current, kakaoParticipants))
       setSyncMessage(
         kakaoParticipants.length > 0
           ? `${kakaoParticipants.length}명의 카카오 친구를 불러왔습니다.`
-          : "조회 가능한 카카오 친구가 없습니다. 카카오 친구 API는 앱 권한과 친구의 동의 상태에 따라 일부 친구만 제공됩니다.",
+          : EMPTY_FRIENDS_MESSAGE,
       )
     } catch (error) {
-      console.error("Failed to sync Kakao friends:", error)
-      setSyncMessage(getKakaoErrorMessage(error))
+      console.warn("Failed to sync Kakao friends", error)
+      setSyncMessage(FRIENDS_LOAD_ERROR_MESSAGE)
     } finally {
       setIsSyncing(false)
     }
   }
 
-  const toggleParticipant = (friend: Participant) => {
-    setSelectedParticipants(toggleParticipantSelection(selectedParticipants, friend))
+  const addParticipant = (participant: Participant, options: { select?: boolean } = {}) => {
+    setAllParticipants((current) => mergeParticipants(current, [participant]))
+
+    if (options.select && !selectedParticipants.some((selected) => selected.id === participant.id || selected.name === participant.name)) {
+      setSelectedParticipants([...selectedParticipants, participant])
+    }
+  }
+
+  const handleAddManualParticipant = () => {
+    const name = manualName.trim()
+
+    if (!name) {
+      return
+    }
+
+    const participant: Participant = {
+      id: stableNumberId(`manual:${name}`),
+      name,
+      avatar: name.slice(0, 1),
+    }
+
+    addParticipant(participant, { select: true })
+    setManualName("")
+    setSyncMessage("")
+  }
+
+  const toggleParticipant = (participant: Participant) => {
+    if (isDefaultParticipant(participant)) {
+      return
+    }
+
+    setSelectedParticipants(toggleParticipantSelection(selectedParticipants, participant))
   }
 
   const isSelected = (id: number) => isParticipantSelected(selectedParticipants, id)
   const filteredFriends = filterParticipants(allParticipants, searchQuery)
+  const hasFriends = filteredFriends.length > 0
 
   return (
-    <div className="flex flex-col min-h-screen bg-background">
-      <div className="sticky top-0 bg-background/95 backdrop-blur-sm border-b border-border px-4 py-4 z-10">
+    <div className="flex min-h-screen flex-col bg-background">
+      <div className="sticky top-0 z-10 border-b border-border bg-background/95 px-4 py-4 backdrop-blur-sm">
         <div className="flex items-center gap-4">
           <button
             onClick={onBack}
-            className="w-10 h-10 flex items-center justify-center rounded-full hover:bg-muted"
+            className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-muted"
+            aria-label="이전으로"
           >
-            <ArrowLeft className="w-5 h-5" />
+            <ArrowLeft className="h-5 w-5" />
           </button>
           <h2 className="text-lg font-bold">참여자 선택</h2>
-          {selectedParticipants.length > 0 && (
-            <span className="ml-auto bg-primary text-primary-foreground text-sm font-medium px-3 py-1 rounded-full">
-              {selectedParticipants.length}명
-            </span>
-          )}
+          <span className="ml-auto rounded-full bg-primary px-3 py-1 text-sm font-medium text-primary-foreground">
+            {selectedParticipants.length}명
+          </span>
         </div>
       </div>
 
       <div className="px-4 py-3">
         <div className="relative">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+          <Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-muted-foreground" />
           <input
             type="text"
             placeholder="친구 검색"
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
-            className="w-full pl-12 pr-4 py-3 bg-card rounded-xl border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+            className="w-full rounded-xl border border-border bg-card py-3 pl-12 pr-4 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary"
           />
         </div>
       </div>
 
-      <div className="px-4 py-2">
+      <div className="space-y-3 px-4 py-2">
         <div className="flex gap-2">
           <button
             onClick={handleSyncKakaoFriends}
-            disabled={isSyncing}
-            className="flex-1 flex items-center justify-center gap-2 py-3 bg-kakao text-kakao-foreground rounded-xl font-medium disabled:opacity-70 transition-opacity"
+            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-kakao py-3 font-medium text-kakao-foreground transition-opacity"
           >
             {isSyncing ? (
               <span className="flex items-center gap-2">
-                <span className="w-4 h-4 border-2 border-kakao-foreground/30 border-t-kakao-foreground rounded-full animate-spin" />
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-kakao-foreground/30 border-t-kakao-foreground" />
                 불러오는 중...
               </span>
             ) : (
               <>
-                <MessageCircle className="w-5 h-5 fill-current" />
+                <MessageCircle className="h-5 w-5 fill-current" />
                 카카오 친구 불러오기
               </>
             )}
           </button>
-          <button className="flex items-center justify-center gap-2 px-4 py-3 bg-card border border-border rounded-xl">
-            <Link2 className="w-5 h-5" />
+          <button className="flex items-center justify-center gap-2 rounded-xl border border-border bg-card px-4 py-3">
+            <Link2 className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={manualName}
+            onChange={(event) => setManualName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                handleAddManualParticipant()
+              }
+            }}
+            placeholder="직접 추가할 이름"
+            className="min-w-0 flex-1 rounded-xl border border-border bg-card px-4 py-3 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+          />
+          <button
+            onClick={handleAddManualParticipant}
+            disabled={!manualName.trim()}
+            className="flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-medium text-primary-foreground disabled:opacity-50"
+          >
+            <UserPlus className="h-5 w-5" />
+            추가
           </button>
         </div>
 
         {syncMessage && (
-          <p className="mt-3 rounded-xl bg-muted px-4 py-3 text-sm text-muted-foreground">
+          <p className="rounded-xl bg-muted px-4 py-3 text-sm text-muted-foreground">
             {syncMessage}
           </p>
         )}
@@ -177,16 +267,17 @@ export default function ParticipantScreen({
               <button
                 key={participant.id}
                 onClick={() => toggleParticipant(participant)}
-                className="flex items-center gap-2 px-3 py-2 bg-primary/10 rounded-full border border-primary/20 shrink-0"
+                disabled={isDefaultParticipant(participant)}
+                className="flex shrink-0 items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-3 py-2 disabled:cursor-default"
               >
                 {participant.imageUrl ? (
-                  <img src={participant.imageUrl} alt={participant.name} className="w-6 h-6 rounded-full object-cover" />
+                  <img src={participant.imageUrl} alt={participant.name} className="h-6 w-6 rounded-full object-cover" />
                 ) : (
-                  <span className="text-lg">{participant.avatar}</span>
+                  <span className="text-sm font-semibold">{participant.avatar}</span>
                 )}
                 <span className="text-sm font-medium text-foreground">{participant.name}</span>
-                <span className="w-4 h-4 bg-primary rounded-full flex items-center justify-center">
-                  <Check className="w-3 h-3 text-primary-foreground" />
+                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-primary">
+                  <Check className="h-3 w-3 text-primary-foreground" />
                 </span>
               </button>
             ))}
@@ -196,22 +287,22 @@ export default function ParticipantScreen({
 
       {frequentParticipants.length > 0 && searchQuery === "" && (
         <div className="px-4 py-3">
-          <div className="flex items-center gap-2 mb-3">
-            <Users className="w-4 h-4 text-muted-foreground" />
+          <div className="mb-3 flex items-center gap-2">
+            <Users className="h-4 w-4 text-muted-foreground" />
             <h4 className="text-sm font-semibold text-muted-foreground">자주 함께한 친구</h4>
           </div>
           <div className="flex gap-3">
-            {frequentParticipants.map((friend) => (
+            {dedupeParticipants(frequentParticipants).map((friend) => (
               <button
                 key={friend.id}
                 onClick={() => toggleParticipant(friend)}
-                className={`flex flex-col items-center gap-2 p-3 rounded-xl border-2 transition-all ${
+                className={`flex flex-col items-center gap-2 rounded-xl border-2 p-3 transition-all ${
                   isSelected(friend.id) ? "border-primary bg-primary/5" : "border-transparent bg-card"
                 }`}
               >
-                <div className="w-14 h-14 bg-muted rounded-full flex items-center justify-center text-2xl overflow-hidden">
+                <div className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-full bg-muted text-2xl">
                   {friend.imageUrl ? (
-                    <img src={friend.imageUrl} alt={friend.name} className="w-full h-full object-cover" />
+                    <img src={friend.imageUrl} alt={friend.name} className="h-full w-full object-cover" />
                   ) : (
                     friend.avatar
                   )}
@@ -224,11 +315,11 @@ export default function ParticipantScreen({
       )}
 
       <div className="flex-1 px-4 py-3">
-        <h4 className="text-sm font-semibold text-muted-foreground mb-3">카카오 친구 목록</h4>
+        <h4 className="mb-3 text-sm font-semibold text-muted-foreground">카카오 친구 목록</h4>
 
-        {filteredFriends.length === 0 ? (
+        {!hasFriends ? (
           <div className="rounded-2xl border border-dashed border-border bg-card px-4 py-8 text-center text-sm text-muted-foreground">
-            카카오 친구 불러오기를 눌러 실제 친구 목록을 가져오세요.
+            {syncMessage || "카카오 친구 불러오기를 눌러 친구 목록을 가져오세요."}
           </div>
         ) : (
           <div className="space-y-2">
@@ -236,24 +327,24 @@ export default function ParticipantScreen({
               <button
                 key={friend.id}
                 onClick={() => toggleParticipant(friend)}
-                className={`w-full flex items-center gap-4 p-3 rounded-xl border-2 transition-all ${
+                className={`flex w-full items-center gap-4 rounded-xl border-2 p-3 transition-all ${
                   isSelected(friend.id) ? "border-primary bg-primary/5" : "border-transparent bg-card"
                 }`}
               >
-                <div className="w-12 h-12 bg-muted rounded-full flex items-center justify-center text-xl overflow-hidden">
+                <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-full bg-muted text-xl">
                   {friend.imageUrl ? (
-                    <img src={friend.imageUrl} alt={friend.name} className="w-full h-full object-cover" />
+                    <img src={friend.imageUrl} alt={friend.name} className="h-full w-full object-cover" />
                   ) : (
                     friend.avatar
                   )}
                 </div>
                 <span className="flex-1 text-left font-medium">{friend.name}</span>
                 <div
-                  className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${
-                    isSelected(friend.id) ? "bg-primary border-primary" : "border-muted-foreground"
+                  className={`flex h-6 w-6 items-center justify-center rounded-full border-2 ${
+                    isSelected(friend.id) ? "border-primary bg-primary" : "border-muted-foreground"
                   }`}
                 >
-                  {isSelected(friend.id) && <Check className="w-4 h-4 text-primary-foreground" />}
+                  {isSelected(friend.id) && <Check className="h-4 w-4 text-primary-foreground" />}
                 </div>
               </button>
             ))}
@@ -261,11 +352,11 @@ export default function ParticipantScreen({
         )}
       </div>
 
-      <div className="sticky bottom-0 p-4 bg-background border-t border-border">
+      <div className="sticky bottom-0 border-t border-border bg-background p-4">
         <button
           onClick={onNext}
           disabled={selectedParticipants.length === 0}
-          className="w-full py-4 bg-primary text-primary-foreground rounded-2xl font-semibold text-lg shadow-lg shadow-primary/20 active:scale-[0.98] transition-transform disabled:opacity-50 disabled:shadow-none"
+          className="w-full rounded-2xl bg-primary py-4 text-lg font-semibold text-primary-foreground shadow-lg shadow-primary/20 transition-transform active:scale-[0.98] disabled:opacity-50 disabled:shadow-none"
         >
           다음
         </button>

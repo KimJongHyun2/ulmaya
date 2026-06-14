@@ -30,6 +30,10 @@ export interface KakaoFriendResponse {
   favorite?: boolean
 }
 
+interface KakaoFriendsApiResponse {
+  elements?: unknown
+}
+
 const KAKAO_SDK_TIMEOUT_MS = 5000
 const KAKAO_LOGIN_SCOPES = [
   "profile_nickname",
@@ -38,8 +42,60 @@ const KAKAO_LOGIN_SCOPES = [
   "talk_message",
 ]
 
+export const KAKAO_SDK_UNAVAILABLE_MESSAGE =
+  "카카오 SDK 로그인 기능을 사용할 수 없습니다. 직접 추가로 참여자를 등록해주세요."
+
+export class KakaoSdkUnavailableError extends Error {
+  constructor(message = KAKAO_SDK_UNAVAILABLE_MESSAGE) {
+    super(message)
+    this.name = "KakaoSdkUnavailableError"
+  }
+}
+
 function getKakaoJsKey() {
-  return process.env.NEXT_PUBLIC_KAKAO_JS_KEY
+  return process.env.NEXT_PUBLIC_KAKAO_JAVASCRIPT_KEY ?? process.env.NEXT_PUBLIC_KAKAO_JS_KEY
+}
+
+function hasKakaoApiRequest(Kakao: any) {
+  return typeof Kakao?.API?.request === "function"
+}
+
+function hasKakaoAuthLogin(Kakao: any) {
+  return typeof Kakao?.Auth?.login === "function"
+}
+
+function getKakaoAccessToken(Kakao: any) {
+  return typeof Kakao?.Auth?.getAccessToken === "function" ? Kakao.Auth.getAccessToken() : null
+}
+
+function requestKakaoApi<T>(Kakao: any, options: Record<string, unknown>) {
+  return new Promise<T>((resolve, reject) => {
+    if (!hasKakaoApiRequest(Kakao)) {
+      const error = new KakaoSdkUnavailableError()
+      console.warn("Kakao.API.request is not available.", Kakao)
+      reject(error)
+      return
+    }
+
+    Kakao.API.request({
+      ...options,
+      success: (response: T) => resolve(response),
+      fail: (error: unknown) => {
+        console.warn("Kakao API request failed", error)
+        reject(error)
+      },
+    })
+  })
+}
+
+function normalizeKakaoFriends(response: KakaoFriendsApiResponse): KakaoFriendResponse[] {
+  if (!Array.isArray(response.elements)) {
+    return []
+  }
+
+  return response.elements
+    .filter((friend): friend is KakaoFriendResponse => Boolean(friend) && typeof friend === "object")
+    .filter((friend) => Boolean(friend.id ?? friend.uuid ?? friend.profile_nickname))
 }
 
 export function initKakao() {
@@ -50,7 +106,7 @@ export function initKakao() {
   const jsKey = getKakaoJsKey()
 
   if (!jsKey || jsKey === "your_javascript_key_here") {
-    console.warn("NEXT_PUBLIC_KAKAO_JS_KEY is not configured.")
+    console.warn("Kakao JavaScript key is not configured. Set NEXT_PUBLIC_KAKAO_JAVASCRIPT_KEY or NEXT_PUBLIC_KAKAO_JS_KEY.")
     return false
   }
 
@@ -78,6 +134,7 @@ export function waitForKakaoSdk() {
 
       if (Date.now() - startedAt > KAKAO_SDK_TIMEOUT_MS) {
         window.clearInterval(timer)
+        console.warn("Kakao SDK failed to load or initialize within timeout.")
         reject(new Error("Kakao SDK failed to load or initialize."))
       }
     }, 100)
@@ -100,17 +157,30 @@ export function getKakaoProfile(user: KakaoUserResponse) {
 export async function loginWithKakao() {
   const Kakao = await waitForKakaoSdk()
 
+  if (getKakaoAccessToken(Kakao)) {
+    return requestKakaoApi<KakaoUserResponse>(Kakao, { url: "/v2/user/me" })
+  }
+
+  if (!hasKakaoAuthLogin(Kakao)) {
+    console.warn("Kakao.Auth.login is not available. Staying on the participant screen.", Kakao)
+    throw new KakaoSdkUnavailableError()
+  }
+
   return new Promise<KakaoUserResponse>((resolve, reject) => {
     Kakao.Auth.login({
       scope: KAKAO_LOGIN_SCOPES.join(","),
-      success: () => {
-        Kakao.API.request({
-          url: "/v2/user/me",
-          success: (res: KakaoUserResponse) => resolve(res),
-          fail: (error: unknown) => reject(error),
-        })
+      success: async () => {
+        try {
+          const profile = await requestKakaoApi<KakaoUserResponse>(Kakao, { url: "/v2/user/me" })
+          resolve(profile)
+        } catch (error) {
+          reject(error)
+        }
       },
-      fail: (error: unknown) => reject(error),
+      fail: (error: unknown) => {
+        console.warn("Kakao SDK login failed", error)
+        reject(error)
+      },
     })
   })
 }
@@ -118,7 +188,7 @@ export async function loginWithKakao() {
 export async function logoutFromKakao() {
   const Kakao = await waitForKakaoSdk()
 
-  if (Kakao.Auth.getAccessToken()) {
+  if (getKakaoAccessToken(Kakao) && typeof Kakao?.Auth?.logout === "function") {
     await new Promise<void>((resolve) => {
       Kakao.Auth.logout(() => resolve())
     })
@@ -128,19 +198,24 @@ export async function logoutFromKakao() {
 export async function getKakaoFriends() {
   const Kakao = await waitForKakaoSdk()
 
-  return new Promise<KakaoFriendResponse[]>((resolve, reject) => {
-    Kakao.API.request({
-      url: "/v1/api/talk/friends",
-      data: {
-        limit: 100,
-        order: "asc",
-      },
-      success: (res: { elements?: KakaoFriendResponse[] }) => {
-        resolve(res.elements ?? [])
-      },
-      fail: (error: unknown) => reject(error),
-    })
+  if (!hasKakaoApiRequest(Kakao)) {
+    console.warn("Kakao.API.request is not available. Friend API cannot be called.", Kakao)
+    throw new KakaoSdkUnavailableError()
+  }
+
+  if (!getKakaoAccessToken(Kakao)) {
+    await loginWithKakao()
+  }
+
+  const response = await requestKakaoApi<KakaoFriendsApiResponse>(Kakao, {
+    url: "/v1/api/talk/friends",
+    data: {
+      limit: 100,
+      order: "asc",
+    },
   })
+
+  return normalizeKakaoFriends(response)
 }
 
 export function shareToKakao({
