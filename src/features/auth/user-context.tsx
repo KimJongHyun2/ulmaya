@@ -4,6 +4,7 @@ import { createContext, useContext, useState, useEffect, type ReactNode } from "
 
 interface User {
   id: number
+  user_id?: string
   kakao_id?: string
   nickname: string
   email?: string

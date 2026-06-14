@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { supabase } from "@/lib/supabase"
 
 interface KakaoTokenResponse {
   access_token?: string
@@ -10,7 +11,7 @@ interface KakaoTokenResponse {
 }
 
 interface KakaoUserResponse {
-  id: number
+  id?: number
   properties?: {
     nickname?: string
     profile_image?: string
@@ -24,8 +25,50 @@ interface KakaoUserResponse {
   }
 }
 
+interface PublicUserPayload {
+  user_id: string
+  kakao_id: string
+  nickname: string
+  profile_image: string | null
+}
+
 function encodeCookieValue(value: unknown) {
   return Buffer.from(JSON.stringify(value), "utf8").toString("base64url")
+}
+
+function buildUserId(kakaoId: string) {
+  return `kakao:${kakaoId}`
+}
+
+async function upsertPublicUser(user: PublicUserPayload) {
+  if (!supabase) {
+    console.error("[auth kakao callback] Supabase client is not configured. User was not saved.", {
+      kakao_id: user.kakao_id,
+      user_id: user.user_id,
+    })
+    return
+  }
+
+  const { error } = await supabase
+    .from("users")
+    .upsert(user, { onConflict: "kakao_id" })
+
+  if (error) {
+    console.error("[auth kakao callback] Failed to upsert public.users.", {
+      kakao_id: user.kakao_id,
+      user_id: user.user_id,
+      message: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint,
+    })
+    return
+  }
+
+  console.info("[auth kakao callback] public.users upsert success.", {
+    kakao_id: user.kakao_id,
+    user_id: user.user_id,
+  })
 }
 
 export async function GET(request: NextRequest) {
@@ -91,12 +134,44 @@ export async function GET(request: NextRequest) {
   }
 
   const profile = kakaoUser.kakao_account?.profile
+  if (!kakaoUser.id) {
+    console.error("[auth kakao callback] Kakao profile response did not include an id.", {
+      hasNickname: Boolean(profile?.nickname ?? kakaoUser.properties?.nickname),
+      hasProfileImage: Boolean(
+        profile?.profile_image_url ?? kakaoUser.properties?.profile_image,
+      ),
+    })
+    return NextResponse.json(
+      { message: "Kakao user id is missing from profile response." },
+      { status: 502 },
+    )
+  }
+
+  const kakaoId = String(kakaoUser.id)
+  const userId = buildUserId(kakaoId)
+  const nickname = profile?.nickname ?? kakaoUser.properties?.nickname ?? ""
+  const profileImage = profile?.profile_image_url ?? kakaoUser.properties?.profile_image ?? ""
+
+  console.info("[auth kakao callback] Kakao profile received.", {
+    hasKakaoId: Boolean(kakaoId),
+    hasNickname: Boolean(nickname),
+    hasProfileImage: Boolean(profileImage),
+  })
+
+  await upsertPublicUser({
+    user_id: userId,
+    kakao_id: kakaoId,
+    nickname,
+    profile_image: profileImage || null,
+  })
+
   const user = {
     id: kakaoUser.id,
-    kakao_id: String(kakaoUser.id),
-    nickname: profile?.nickname ?? kakaoUser.properties?.nickname ?? "",
+    user_id: userId,
+    kakao_id: kakaoId,
+    nickname,
     email: kakaoUser.kakao_account?.email ?? "",
-    profile_image: profile?.profile_image_url ?? kakaoUser.properties?.profile_image ?? "",
+    profile_image: profileImage,
   }
 
   const response = NextResponse.redirect(new URL("/", request.url))
