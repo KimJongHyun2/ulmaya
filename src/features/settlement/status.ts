@@ -1,5 +1,8 @@
 export type SettlementPaymentStatus = "PENDING" | "PAID"
 
+export const SETTLEMENT_PENDING_STATUS: SettlementPaymentStatus = "PENDING"
+export const SETTLEMENT_PAID_STATUS: SettlementPaymentStatus = "PAID"
+
 const COMPLETED_REQUEST_STATUSES = new Set(["PAID", "COMPLETED"])
 
 function normalizeStatusValue(status: string | null | undefined) {
@@ -15,5 +18,9 @@ export function getSettlementRequestDisplayStatus(status: string | null | undefi
 }
 
 export function getNextSettlementRequestStatus(status: string | null | undefined): SettlementPaymentStatus {
-  return isSettlementRequestCompleted(status) ? "PENDING" : "PAID"
+  return isSettlementRequestCompleted(status) ? SETTLEMENT_PENDING_STATUS : SETTLEMENT_PAID_STATUS
+}
+
+export function getSettlementResultTransferStatus(requestStatus: SettlementPaymentStatus) {
+  return requestStatus
 }

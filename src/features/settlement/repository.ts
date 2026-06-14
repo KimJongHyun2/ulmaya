@@ -4,7 +4,12 @@ import type {
   SettlementSessionPatch,
 } from "@/types/session"
 import { supabase } from "@/lib/supabase"
-import { isSettlementRequestCompleted, type SettlementPaymentStatus } from "@/features/settlement/status"
+import {
+  SETTLEMENT_PENDING_STATUS,
+  getSettlementResultTransferStatus,
+  isSettlementRequestCompleted,
+  type SettlementPaymentStatus,
+} from "@/features/settlement/status"
 
 const memorySessions = new Map<string, SettlementSession>()
 const TABLE_NAME = "settlement_sessions"
@@ -31,6 +36,7 @@ export interface SettlementHistoryItem {
   settlementResultId: string
   settlementRequestIds: string[]
   receiptId: string
+  participantId: number
   storeName: string
   settlementDate?: string | null
   menuName: string
@@ -85,6 +91,19 @@ interface MenuItemRow {
 interface ParticipantRow {
   participant_id: number
   name: string
+}
+
+interface ParticipantSettlementStatusTarget {
+  receiptId: string
+  participantId: number
+}
+
+type SettlementStatusTarget = string | string[] | ParticipantSettlementStatusTarget
+
+function isParticipantSettlementStatusTarget(
+  target: SettlementStatusTarget,
+): target is ParticipantSettlementStatusTarget {
+  return typeof target === "object" && !Array.isArray(target)
 }
 
 function cloneSession(session: SettlementSession): SettlementSession {
@@ -179,6 +198,9 @@ function getMenuSettlementParticipants(session: SettlementSession, itemId: numbe
 function buildSettlementRows(session: SettlementSession) {
   const requestRows: Array<Record<string, unknown>> = []
   const resultRows: Array<Record<string, unknown>> = []
+  const initialRequestStatus = SETTLEMENT_PENDING_STATUS
+  const initialTransferStatus = getSettlementResultTransferStatus(initialRequestStatus)
+
   session.menuItems.forEach((menuItem) => {
     const participants = getMenuSettlementParticipants(session, menuItem.id)
 
@@ -197,7 +219,7 @@ function buildSettlementRows(session: SettlementSession) {
         participant_id: participant.id,
         requested_amount: amount,
         request_method: "카카오페이",
-        request_status: "PENDING",
+        request_status: initialRequestStatus,
         request_message: `${session.receiptInfo.storeName} 정산 요청`,
       })
 
@@ -208,7 +230,7 @@ function buildSettlementRows(session: SettlementSession) {
         participant_id: participant.id,
         settlement_amount: amount,
         invite_status: "초대완료",
-        transfer_status: "PENDING",
+        transfer_status: initialTransferStatus,
         completed: false,
         completed_at: null,
       })
@@ -834,6 +856,7 @@ export async function listSettlementHistory(): Promise<SettlementHistoryItem[]> 
         settlementResultId: row.settlement_result_id,
         settlementRequestIds: [row.settlement_result_id],
         receiptId: row.receipt_id,
+        participantId: row.participant_id,
         storeName: store?.store_name ?? "미확인 가게",
         menuName: menu?.menu_name ?? "미확인 메뉴",
         menuNames: [menu?.menu_name ?? "미확인 메뉴"],
@@ -962,6 +985,7 @@ export async function listSettlementHistoryCards(): Promise<SettlementHistoryIte
       string,
       {
         receiptId: string
+        participantId: number
         storeName: string
         settlementDate: string | null
         participantName: string
@@ -998,6 +1022,7 @@ export async function listSettlementHistoryCards(): Promise<SettlementHistoryIte
 
       personMap.set(groupKey, {
         receiptId: request.receipt_id,
+        participantId: request.participant_id,
         storeName: store?.store_name ?? "미확인 가게",
         settlementDate: receipt?.registered_at ?? null,
         participantName: participant?.name ?? "미확인 참여자",
@@ -1025,6 +1050,7 @@ export async function listSettlementHistoryCards(): Promise<SettlementHistoryIte
           settlementResultId: groupKey,
           settlementRequestIds: person.settlementRequestIds,
           receiptId: person.receiptId,
+          participantId: person.participantId,
           storeName: person.storeName,
           settlementDate: person.settlementDate,
           menuName: person.menuNames.join(", "),
@@ -1051,7 +1077,7 @@ export async function listSettlementHistoryCards(): Promise<SettlementHistoryIte
 }
 
 export async function updateSettlementStatus(
-  settlementResultIds: string | string[],
+  settlementTarget: SettlementStatusTarget,
   requestStatus: SettlementPaymentStatus,
 ) {
   if (!supabase) {
@@ -1059,12 +1085,25 @@ export async function updateSettlementStatus(
     throw new Error("Supabase client is not configured.")
   }
 
-  const targetIds = Array.isArray(settlementResultIds) ? settlementResultIds : [settlementResultIds]
-  const logId = targetIds.join(",")
+  const supabaseClient = supabase
+  const targetDescription = isParticipantSettlementStatusTarget(settlementTarget)
+    ? {
+        receipt_id: settlementTarget.receiptId,
+        participant_id: settlementTarget.participantId,
+      }
+    : {
+        settlement_request_ids: Array.isArray(settlementTarget)
+          ? settlementTarget
+          : [settlementTarget],
+      }
+  const logId = isParticipantSettlementStatusTarget(settlementTarget)
+    ? `${settlementTarget.receiptId}:${settlementTarget.participantId}`
+    : (Array.isArray(settlementTarget) ? settlementTarget : [settlementTarget]).join(",")
   const completed = isSettlementRequestCompleted(requestStatus)
   const completedAt = completed ? new Date().toISOString() : null
+  const transferStatus = getSettlementResultTransferStatus(requestStatus)
   const resultPayload = {
-    transfer_status: requestStatus,
+    transfer_status: transferStatus,
     completed,
     completed_at: completedAt,
   }
@@ -1072,7 +1111,59 @@ export async function updateSettlementStatus(
     request_status: requestStatus,
   }
 
-  const { error: requestError } = await supabase
+  const requestQuery = supabaseClient
+    .from("settlement_requests")
+    .select("settlement_request_id,request_status")
+
+  const { data: previousRequestRows, error: previousRequestError } =
+    isParticipantSettlementStatusTarget(settlementTarget)
+      ? await requestQuery
+          .eq("receipt_id", settlementTarget.receiptId)
+          .eq("participant_id", settlementTarget.participantId)
+      : await requestQuery.in(
+          "settlement_request_id",
+          Array.isArray(settlementTarget) ? settlementTarget : [settlementTarget],
+        )
+
+  if (previousRequestError) {
+    logSupabaseTableFailure(
+      "select",
+      "settlement_requests",
+      previousRequestError,
+      targetDescription,
+      logId,
+    )
+    throw previousRequestError
+  }
+
+  const targetIds = ((previousRequestRows ?? []) as Pick<
+    SettlementRequestRow,
+    "settlement_request_id"
+  >[]).map((row) => row.settlement_request_id)
+
+  if (targetIds.length === 0) {
+    const error = new Error("No settlement requests found for status update.")
+    logSupabaseTableFailure("select", "settlement_requests", error, targetDescription, logId)
+    throw error
+  }
+
+  const { data: previousResultRows, error: previousResultError } = await supabaseClient
+    .from("settlement_results")
+    .select("settlement_result_id,transfer_status,completed,completed_at")
+    .in("settlement_result_id", targetIds)
+
+  if (previousResultError) {
+    logSupabaseTableFailure(
+      "select",
+      "settlement_results",
+      previousResultError,
+      { settlement_result_ids: targetIds },
+      logId,
+    )
+    throw previousResultError
+  }
+
+  const { error: requestError } = await supabaseClient
     .from("settlement_requests")
     .update(requestPayload)
     .in("settlement_request_id", targetIds)
@@ -1088,13 +1179,36 @@ export async function updateSettlementStatus(
     throw requestError
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseClient
     .from("settlement_results")
     .update(resultPayload)
     .in("settlement_result_id", targetIds)
     .select("settlement_result_id,transfer_status,completed,completed_at")
 
   if (error) {
+    await Promise.all(
+      ((previousRequestRows ?? []) as SettlementRequestRow[]).map((row) =>
+        supabaseClient
+          .from("settlement_requests")
+          .update({ request_status: row.request_status })
+          .eq("settlement_request_id", row.settlement_request_id),
+      ),
+    )
+    await Promise.all(
+      ((previousResultRows ?? []) as Pick<
+        SettlementResultRow,
+        "settlement_result_id" | "transfer_status" | "completed" | "completed_at"
+      >[]).map((row) =>
+        supabaseClient
+          .from("settlement_results")
+          .update({
+            transfer_status: row.transfer_status,
+            completed: row.completed,
+            completed_at: row.completed_at,
+          })
+          .eq("settlement_result_id", row.settlement_result_id),
+      ),
+    )
     logSupabaseTableFailure(
       "update",
       "settlement_results",
@@ -1110,7 +1224,7 @@ export async function updateSettlementStatus(
 
   return {
     settlement_result_id: firstUpdatedRow?.settlement_result_id ?? targetIds[0],
-    transfer_status: firstUpdatedRow?.transfer_status ?? requestStatus,
+    transfer_status: firstUpdatedRow?.transfer_status ?? transferStatus,
     completed: firstUpdatedRow?.completed ?? completed,
     completed_at: firstUpdatedRow?.completed_at ?? completedAt,
     request_status: requestStatus,

@@ -167,7 +167,10 @@ export default function SettlementHistoryPage() {
 
     try {
       const updatedStatus = await updateSettlementStatus(
-        item.settlementRequestIds,
+        {
+          receiptId: item.receiptId,
+          participantId: item.participantId,
+        },
         nextStatus,
       )
 
