@@ -7,6 +7,7 @@ import MobileAppShell from "@/components/common/mobile-app-shell"
 import {
   listSettlementHistoryCards,
   type SettlementHistoryItem,
+  updateSettlementStatus,
 } from "@/features/settlement/repository"
 
 interface SettlementHistoryGroup {
@@ -62,20 +63,31 @@ function normalizeStatus(status: string | undefined) {
   return status
 }
 
-function StatusBadge({ status }: { status: string | undefined }) {
+function StatusBadge({
+  status,
+  disabled,
+  onClick,
+}: {
+  status: string | undefined
+  disabled: boolean
+  onClick: () => void
+}) {
   const normalizedStatus = normalizeStatus(status)
   const isComplete = normalizedStatus === "완료"
 
   return (
-    <span
-      className={`inline-flex h-6 items-center rounded-full px-2.5 text-xs font-semibold ${
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`inline-flex h-7 items-center rounded-full px-3 text-xs font-semibold transition-transform active:scale-[0.98] disabled:pointer-events-none disabled:opacity-60 ${
         isComplete
           ? "bg-emerald-100 text-emerald-700"
           : "bg-amber-100 text-amber-700"
       }`}
     >
       {normalizedStatus}
-    </span>
+    </button>
   )
 }
 
@@ -116,12 +128,15 @@ export default function SettlementHistoryPage() {
   const [items, setItems] = useState<SettlementHistoryItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState("")
+  const [actionErrorMessage, setActionErrorMessage] = useState("")
+  const [updatingIds, setUpdatingIds] = useState<string[]>([])
 
   const groups = useMemo(() => groupHistoryItems(items), [items])
 
   const loadHistory = useCallback(async () => {
     setIsLoading(true)
     setErrorMessage("")
+    setActionErrorMessage("")
 
     try {
       const nextItems = await listSettlementHistoryCards()
@@ -139,6 +154,59 @@ export default function SettlementHistoryPage() {
     void loadHistory()
   }, [loadHistory])
 
+  const handleToggleStatus = async (item: SettlementHistoryItem) => {
+    if (updatingIds.includes(item.settlementResultId)) {
+      return
+    }
+
+    const nextStatus = normalizeStatus(item.transferStatus) === "완료" ? "대기" : "완료"
+    const previousItems = items
+    const completedAt = nextStatus === "완료" ? new Date().toISOString() : null
+
+    setActionErrorMessage("")
+    setUpdatingIds((prev) => [...prev, item.settlementResultId])
+    setItems((prev) =>
+      prev.map((historyItem) =>
+        historyItem.settlementResultId === item.settlementResultId
+          ? {
+              ...historyItem,
+              transferStatus: nextStatus,
+              completed: nextStatus === "완료",
+              completedAt,
+            }
+          : historyItem,
+      ),
+    )
+
+    try {
+      const updatedStatus = await updateSettlementStatus(
+        item.settlementResultId,
+        nextStatus,
+      )
+
+      setItems((prev) =>
+        prev.map((historyItem) =>
+          historyItem.settlementResultId === item.settlementResultId
+            ? {
+                ...historyItem,
+                transferStatus: updatedStatus.transfer_status,
+                completed: updatedStatus.completed,
+                completedAt: updatedStatus.completed_at,
+              }
+            : historyItem,
+        ),
+      )
+    } catch (error) {
+      console.error("[settlement history] Failed to update status.", error)
+      setItems(previousItems)
+      setActionErrorMessage("송금 상태를 변경하지 못했습니다. 잠시 후 다시 시도해주세요.")
+    } finally {
+      setUpdatingIds((prev) =>
+        prev.filter((updatingId) => updatingId !== item.settlementResultId),
+      )
+    }
+  }
+
   return (
     <MobileAppShell>
       <div className="flex min-h-screen flex-col bg-background">
@@ -153,7 +221,7 @@ export default function SettlementHistoryPage() {
               <ArrowLeft className="h-5 w-5" />
             </button>
             <div className="min-w-0 flex-1">
-              <h1 className="text-lg font-bold text-foreground">정산 기록</h1>
+              <h1 className="text-lg font-bold text-foreground">정산 관리</h1>
               <p className="text-xs text-muted-foreground">
                 완료된 송금과 대기 중인 정산을 확인합니다.
               </p>
@@ -200,6 +268,12 @@ export default function SettlementHistoryPage() {
             </div>
           ) : (
             <div className="space-y-4">
+              {actionErrorMessage && (
+                <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm font-medium text-destructive">
+                  {actionErrorMessage}
+                </div>
+              )}
+
               {groups.map((group) => (
                 <section
                   key={group.receiptId}
@@ -247,7 +321,11 @@ export default function SettlementHistoryPage() {
                           <p className="text-sm font-bold text-foreground">
                             {formatAmount(item.settlementAmount)}
                           </p>
-                          <StatusBadge status={item.transferStatus} />
+                          <StatusBadge
+                            status={item.transferStatus}
+                            disabled={updatingIds.includes(item.settlementResultId)}
+                            onClick={() => void handleToggleStatus(item)}
+                          />
                         </div>
                       </div>
                     ))}

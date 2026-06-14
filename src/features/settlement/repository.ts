@@ -952,6 +952,50 @@ export async function listSettlementHistoryCards(): Promise<SettlementHistoryIte
   }
 }
 
+export async function updateSettlementStatus(
+  settlementResultId: string,
+  transferStatus: "대기" | "완료",
+) {
+  if (!supabase) {
+    logSupabaseNotConfigured()
+    throw new Error("Supabase client is not configured.")
+  }
+
+  const completed = transferStatus === "완료"
+  const payload = {
+    transfer_status: transferStatus,
+    completed,
+    completed_at: completed ? new Date().toISOString() : null,
+  }
+
+  const { data, error } = await supabase
+    .from("settlement_results")
+    .update(payload)
+    .eq("settlement_result_id", settlementResultId)
+    .select("settlement_result_id,transfer_status,completed,completed_at")
+    .single()
+
+  if (error) {
+    logSupabaseTableFailure(
+      "update",
+      "settlement_results",
+      error,
+      { settlement_result_id: settlementResultId, ...payload },
+      settlementResultId,
+    )
+    throw error
+  }
+
+  logSupabaseSuccess("update", settlementResultId)
+
+  return data as {
+    settlement_result_id: string
+    transfer_status: string
+    completed: boolean
+    completed_at: string | null
+  }
+}
+
 export async function saveSessionReceiptInfo(
   sessionId: string,
   receiptInfo: SettlementSessionPatch["receiptInfo"],
