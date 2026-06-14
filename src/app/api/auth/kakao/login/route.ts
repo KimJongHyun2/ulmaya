@@ -15,6 +15,7 @@ export function GET() {
   authorizeUrl.searchParams.set("client_id", clientId)
   authorizeUrl.searchParams.set("redirect_uri", redirectUri)
   authorizeUrl.searchParams.set("response_type", "code")
+  authorizeUrl.searchParams.set("scope", "profile_nickname,profile_image,friends")
 
   return NextResponse.redirect(authorizeUrl)
 }

@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server"
 
 interface KakaoTokenResponse {
   access_token?: string
+  refresh_token?: string
+  expires_in?: number
+  scope?: string
   error?: string
   error_description?: string
 }
@@ -103,6 +106,13 @@ export async function GET(request: NextRequest) {
     secure: process.env.NODE_ENV === "production",
     path: "/",
     maxAge: 60 * 60 * 24 * 7,
+  })
+  response.cookies.set("ulmaya_kakao_access_token", tokenData.access_token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: tokenData.expires_in ?? 3600,
   })
 
   return response

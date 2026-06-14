@@ -7,13 +7,6 @@ import {
   isParticipantSelected,
   toggleParticipant as toggleParticipantSelection,
 } from "@/features/participants/selection"
-import {
-  getKakaoFriends,
-  getKakaoProfile,
-  loginWithKakao,
-  type KakaoFriendResponse,
-} from "@/lib/kakao"
-import { useUser } from "@/features/auth/user-context"
 import type { Participant } from "@/types/participants"
 
 interface ParticipantScreenProps {
@@ -33,8 +26,23 @@ const DEFAULT_PARTICIPANT: Participant = {
 
 const EMPTY_FRIENDS_MESSAGE =
   "불러올 수 있는 카카오 친구가 없습니다. 친구가 이 앱에 연결되어 있지 않거나 friends 동의가 필요할 수 있습니다."
+const FRIENDS_UNAVAILABLE_MESSAGE =
+  "카카오 친구 목록은 앱 연결 및 친구 동의 조건이 필요합니다. 목록이 보이지 않으면 직접 추가해주세요."
 const FRIENDS_LOAD_ERROR_MESSAGE =
   "카카오 친구 목록을 불러오지 못했습니다. 직접 추가로 참여자를 등록해주세요."
+const FRIENDS_RELOGIN_MESSAGE = "카카오 친구 권한 확인을 위해 다시 로그인해주세요."
+
+interface KakaoFriend {
+  id: string
+  nickname: string
+  profileImage: string | null
+}
+
+interface KakaoFriendsResponse {
+  friends?: KakaoFriend[]
+  message?: string
+  reason?: string
+}
 
 function stableNumberId(value: string) {
   let hash = 0
@@ -71,14 +79,14 @@ function mergeParticipants(current: Participant[], incoming: Participant[]) {
   return dedupeParticipants([...current, ...incoming])
 }
 
-function mapFriendToParticipant(friend: KakaoFriendResponse): Participant {
-  const stableId = friend.id ?? stableNumberId(friend.uuid ?? friend.profile_nickname ?? crypto.randomUUID())
+function mapFriendToParticipant(friend: KakaoFriend): Participant {
+  const stableId = stableNumberId(`kakao:${friend.id || friend.nickname}`)
 
   return {
     id: stableId,
-    name: friend.profile_nickname?.trim() || "카카오 친구",
+    name: friend.nickname.trim() || "카카오 친구",
     avatar: "친",
-    imageUrl: friend.profile_thumbnail_image,
+    imageUrl: friend.profileImage ?? undefined,
   }
 }
 
@@ -90,7 +98,6 @@ export default function ParticipantScreen({
   onBack,
   onNext,
 }: ParticipantScreenProps) {
-  const { setUser } = useUser()
   const [searchQuery, setSearchQuery] = useState("")
   const [manualName, setManualName] = useState("")
   const [isSyncing, setIsSyncing] = useState(false)
@@ -98,6 +105,7 @@ export default function ParticipantScreen({
     dedupeParticipants(initialParticipants),
   )
   const [syncMessage, setSyncMessage] = useState("")
+  const [showRelogin, setShowRelogin] = useState(false)
 
   useEffect(() => {
     setAllParticipants((current) => mergeParticipants(current, initialParticipants))
@@ -116,23 +124,41 @@ export default function ParticipantScreen({
 
     setIsSyncing(true)
     setSyncMessage("")
+    setShowRelogin(false)
 
     try {
-      const loggedInUser = await loginWithKakao()
-      setUser(getKakaoProfile(loggedInUser))
+      const response = await fetch("/api/kakao/friends", { cache: "no-store" })
+      const data = (await response.json().catch(() => ({}))) as KakaoFriendsResponse
 
-      const friends = await getKakaoFriends()
-      const kakaoParticipants = dedupeParticipants(friends.map(mapFriendToParticipant))
+      if (response.status === 401) {
+        setSyncMessage(FRIENDS_RELOGIN_MESSAGE)
+        setShowRelogin(true)
+        return
+      }
+
+      if (!response.ok) {
+        console.warn("Kakao friends API failed", {
+          status: response.status,
+          message: data.message,
+        })
+        setSyncMessage(FRIENDS_LOAD_ERROR_MESSAGE)
+        return
+      }
+
+      const kakaoParticipants = dedupeParticipants((data.friends ?? []).map(mapFriendToParticipant))
 
       setAllParticipants((current) => mergeParticipants(current, kakaoParticipants))
       setSyncMessage(
         kakaoParticipants.length > 0
           ? `${kakaoParticipants.length}명의 카카오 친구를 불러왔습니다.`
+          : data.reason === "friends_unavailable"
+            ? FRIENDS_UNAVAILABLE_MESSAGE
           : EMPTY_FRIENDS_MESSAGE,
       )
     } catch (error) {
       console.warn("Failed to sync Kakao friends", error)
       setSyncMessage(FRIENDS_LOAD_ERROR_MESSAGE)
+      setShowRelogin(false)
     } finally {
       setIsSyncing(false)
     }
@@ -162,6 +188,7 @@ export default function ParticipantScreen({
     addParticipant(participant, { select: true })
     setManualName("")
     setSyncMessage("")
+    setShowRelogin(false)
   }
 
   const toggleParticipant = (participant: Participant) => {
@@ -257,6 +284,17 @@ export default function ParticipantScreen({
           <p className="rounded-xl bg-muted px-4 py-3 text-sm text-muted-foreground">
             {syncMessage}
           </p>
+        )}
+        {showRelogin && (
+          <button
+            type="button"
+            onClick={() => {
+              window.location.href = "/api/auth/kakao/login"
+            }}
+            className="w-full rounded-xl border border-border bg-card px-4 py-3 text-sm font-medium text-foreground"
+          >
+            다시 로그인
+          </button>
         )}
       </div>
 
