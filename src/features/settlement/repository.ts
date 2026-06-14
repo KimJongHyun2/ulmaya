@@ -4,6 +4,7 @@ import type {
   SettlementSessionPatch,
 } from "@/types/session"
 import { supabase } from "@/lib/supabase"
+import { isSettlementRequestCompleted, type SettlementPaymentStatus } from "@/features/settlement/status"
 
 const memorySessions = new Map<string, SettlementSession>()
 const TABLE_NAME = "settlement_sessions"
@@ -35,6 +36,7 @@ export interface SettlementHistoryItem {
   participantName: string
   settlementAmount: number
   inviteStatus?: string
+  requestStatus: string
   transferStatus: string
   completed: boolean
   completedAt: string | null
@@ -50,6 +52,11 @@ interface SettlementResultRow {
   transfer_status: string
   completed: boolean
   completed_at: string | null
+}
+
+interface SettlementRequestRow {
+  settlement_request_id: string
+  request_status: string
 }
 
 interface ReceiptRow {
@@ -163,16 +170,9 @@ function getMenuSettlementParticipants(session: SettlementSession, itemId: numbe
   return getAssignedParticipants(session, menuItem.assignedTo)
 }
 
-function getParticipantSettlementStatus(session: SettlementSession, participantId: number) {
-  return session.settlements.find((settlement) => settlement.participant.id === participantId)
-    ?.status
-}
-
 function buildSettlementRows(session: SettlementSession) {
   const requestRows: Array<Record<string, unknown>> = []
   const resultRows: Array<Record<string, unknown>> = []
-  const now = new Date().toISOString()
-
   session.menuItems.forEach((menuItem) => {
     const participants = getMenuSettlementParticipants(session, menuItem.id)
 
@@ -184,8 +184,6 @@ function buildSettlementRows(session: SettlementSession) {
 
     participants.forEach((participant) => {
       const rowId = `${session.id}:${menuItem.id}:${participant.id}`
-      const isSent = getParticipantSettlementStatus(session, participant.id) === "sent"
-
       requestRows.push({
         settlement_request_id: rowId,
         menu_item_id: menuItem.id,
@@ -193,7 +191,7 @@ function buildSettlementRows(session: SettlementSession) {
         participant_id: participant.id,
         requested_amount: amount,
         request_method: "카카오페이",
-        request_status: isSent ? "완료" : "대기",
+        request_status: "PENDING",
         request_message: `${session.receiptInfo.storeName} 정산 요청`,
       })
 
@@ -204,9 +202,9 @@ function buildSettlementRows(session: SettlementSession) {
         participant_id: participant.id,
         settlement_amount: amount,
         invite_status: "초대완료",
-        transfer_status: isSent ? "완료" : "대기",
-        completed: isSent,
-        completed_at: isSent ? now : null,
+        transfer_status: "PENDING",
+        completed: false,
+        completed_at: null,
       })
     })
   })
@@ -742,6 +740,7 @@ export async function listSettlementHistory(): Promise<SettlementHistoryItem[]> 
     const results = (resultRows ?? []) as SettlementResultRow[]
     const receiptIds = Array.from(new Set(results.map((row) => row.receipt_id)))
     const participantIds = Array.from(new Set(results.map((row) => row.participant_id)))
+    const requestIds = results.map((row) => row.settlement_result_id)
 
     const { data: receiptRows, error: receiptError } = await supabase
       .from("receipts")
@@ -788,6 +787,16 @@ export async function listSettlementHistory(): Promise<SettlementHistoryItem[]> 
       return []
     }
 
+    const { data: requestRows, error: requestError } = await supabase
+      .from("settlement_requests")
+      .select("settlement_request_id,request_status")
+      .in("settlement_request_id", requestIds.length > 0 ? requestIds : [""])
+
+    if (requestError) {
+      logSupabaseFailure("select", requestError)
+      return []
+    }
+
     const receiptMap = new Map(receipts.map((row) => [row.receipt_id, row]))
     const storeMap = new Map(((storeRows ?? []) as StoreRow[]).map((row) => [row.store_id, row]))
     const menuMap = new Map(
@@ -799,6 +808,12 @@ export async function listSettlementHistory(): Promise<SettlementHistoryItem[]> 
     const participantMap = new Map(
       ((participantRows ?? []) as ParticipantRow[]).map((row) => [row.participant_id, row]),
     )
+    const requestMap = new Map(
+      ((requestRows ?? []) as SettlementRequestRow[]).map((row) => [
+        row.settlement_request_id,
+        row,
+      ]),
+    )
 
     logSupabaseSuccess("select", "settlement-history")
 
@@ -807,6 +822,7 @@ export async function listSettlementHistory(): Promise<SettlementHistoryItem[]> 
       const store = receipt?.store_id ? storeMap.get(receipt.store_id) : null
       const menu = menuMap.get(`${row.receipt_id}:${row.menu_item_id}`)
       const participant = participantMap.get(row.participant_id)
+      const requestStatus = requestMap.get(row.settlement_result_id)?.request_status ?? "PENDING"
 
       return {
         settlementResultId: row.settlement_result_id,
@@ -815,8 +831,9 @@ export async function listSettlementHistory(): Promise<SettlementHistoryItem[]> 
         menuName: menu?.menu_name ?? "미확인 메뉴",
         participantName: participant?.name ?? "미확인 참여자",
         settlementAmount: row.settlement_amount,
+        requestStatus,
         transferStatus: row.transfer_status,
-        completed: row.completed,
+        completed: isSettlementRequestCompleted(requestStatus),
         completedAt: row.completed_at,
       }
     })
@@ -854,6 +871,7 @@ export async function listSettlementHistoryCards(): Promise<SettlementHistoryIte
 
     const receiptIds = Array.from(new Set(results.map((row) => row.receipt_id)))
     const participantIds = Array.from(new Set(results.map((row) => row.participant_id)))
+    const requestIds = results.map((row) => row.settlement_result_id)
 
     const { data: receiptRows, error: receiptError } = await supabase
       .from("receipts")
@@ -904,6 +922,16 @@ export async function listSettlementHistoryCards(): Promise<SettlementHistoryIte
       throw participantError
     }
 
+    const { data: requestRows, error: requestError } = await supabase
+      .from("settlement_requests")
+      .select("settlement_request_id,request_status")
+      .in("settlement_request_id", requestIds)
+
+    if (requestError) {
+      logSupabaseFailure("select", requestError)
+      throw requestError
+    }
+
     const receiptMap = new Map(receipts.map((row) => [row.receipt_id, row]))
     const storeMap = new Map(((storeRows ?? []) as StoreRow[]).map((row) => [row.store_id, row]))
     const menuMap = new Map(
@@ -915,6 +943,12 @@ export async function listSettlementHistoryCards(): Promise<SettlementHistoryIte
     const participantMap = new Map(
       ((participantRows ?? []) as ParticipantRow[]).map((row) => [row.participant_id, row]),
     )
+    const requestMap = new Map(
+      ((requestRows ?? []) as SettlementRequestRow[]).map((row) => [
+        row.settlement_request_id,
+        row,
+      ]),
+    )
 
     logSupabaseSuccess("select", "settlement-history")
 
@@ -924,6 +958,7 @@ export async function listSettlementHistoryCards(): Promise<SettlementHistoryIte
         const store = receipt?.store_id ? storeMap.get(receipt.store_id) : null
         const menu = menuMap.get(`${row.receipt_id}:${row.menu_item_id}`)
         const participant = participantMap.get(row.participant_id)
+        const requestStatus = requestMap.get(row.settlement_result_id)?.request_status ?? "PENDING"
 
         return {
           settlementResultId: row.settlement_result_id,
@@ -934,8 +969,9 @@ export async function listSettlementHistoryCards(): Promise<SettlementHistoryIte
           participantName: participant?.name ?? "미확인 참여자",
           settlementAmount: row.settlement_amount,
           inviteStatus: row.invite_status,
+          requestStatus,
           transferStatus: row.transfer_status,
-          completed: row.completed,
+          completed: isSettlementRequestCompleted(requestStatus),
           completedAt: row.completed_at,
         }
       })
@@ -954,23 +990,43 @@ export async function listSettlementHistoryCards(): Promise<SettlementHistoryIte
 
 export async function updateSettlementStatus(
   settlementResultId: string,
-  transferStatus: "대기" | "완료",
+  requestStatus: SettlementPaymentStatus,
 ) {
   if (!supabase) {
     logSupabaseNotConfigured()
     throw new Error("Supabase client is not configured.")
   }
 
-  const completed = transferStatus === "완료"
-  const payload = {
-    transfer_status: transferStatus,
+  const completed = isSettlementRequestCompleted(requestStatus)
+  const completedAt = completed ? new Date().toISOString() : null
+  const resultPayload = {
+    transfer_status: requestStatus,
     completed,
-    completed_at: completed ? new Date().toISOString() : null,
+    completed_at: completedAt,
+  }
+  const requestPayload = {
+    request_status: requestStatus,
+  }
+
+  const { error: requestError } = await supabase
+    .from("settlement_requests")
+    .update(requestPayload)
+    .eq("settlement_request_id", settlementResultId)
+
+  if (requestError) {
+    logSupabaseTableFailure(
+      "update",
+      "settlement_requests",
+      requestError,
+      { settlement_request_id: settlementResultId, ...requestPayload },
+      settlementResultId,
+    )
+    throw requestError
   }
 
   const { data, error } = await supabase
     .from("settlement_results")
-    .update(payload)
+    .update(resultPayload)
     .eq("settlement_result_id", settlementResultId)
     .select("settlement_result_id,transfer_status,completed,completed_at")
     .single()
@@ -980,7 +1036,7 @@ export async function updateSettlementStatus(
       "update",
       "settlement_results",
       error,
-      { settlement_result_id: settlementResultId, ...payload },
+      { settlement_result_id: settlementResultId, ...resultPayload },
       settlementResultId,
     )
     throw error
@@ -988,8 +1044,12 @@ export async function updateSettlementStatus(
 
   logSupabaseSuccess("update", settlementResultId)
 
-  return data as {
+  return {
+    ...data,
+    request_status: requestStatus,
+  } as {
     settlement_result_id: string
+    request_status: string
     transfer_status: string
     completed: boolean
     completed_at: string | null

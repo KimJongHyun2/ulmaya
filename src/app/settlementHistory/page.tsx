@@ -9,6 +9,11 @@ import {
   type SettlementHistoryItem,
   updateSettlementStatus,
 } from "@/features/settlement/repository"
+import {
+  getNextSettlementRequestStatus,
+  getSettlementRequestDisplayStatus,
+  isSettlementRequestCompleted,
+} from "@/features/settlement/status"
 
 interface SettlementHistoryGroup {
   receiptId: string
@@ -43,17 +48,9 @@ function formatDate(value: string | null | undefined) {
   })
 }
 
-function isCompletedStatus(status: string) {
-  return status === "완료" || status.toUpperCase() === "COMPLETED"
-}
-
-function normalizeStatus(status: string | undefined) {
+function normalizeInviteStatus(status: string | undefined) {
   if (!status) {
     return "대기"
-  }
-
-  if (isCompletedStatus(status)) {
-    return "완료"
   }
 
   if (status === "대기" || status.toUpperCase() === "PENDING") {
@@ -72,8 +69,8 @@ function StatusBadge({
   disabled: boolean
   onClick: () => void
 }) {
-  const normalizedStatus = normalizeStatus(status)
-  const isComplete = normalizedStatus === "완료"
+  const normalizedStatus = getSettlementRequestDisplayStatus(status)
+  const isComplete = isSettlementRequestCompleted(status)
 
   return (
     <button
@@ -100,7 +97,7 @@ function groupHistoryItems(items: SettlementHistoryItem[]) {
     if (existingGroup) {
       existingGroup.items.push(item)
       existingGroup.totalAmount += item.settlementAmount
-      existingGroup.completedCount += item.completed ? 1 : 0
+      existingGroup.completedCount += isSettlementRequestCompleted(item.requestStatus) ? 1 : 0
       return
     }
 
@@ -109,7 +106,7 @@ function groupHistoryItems(items: SettlementHistoryItem[]) {
       storeName: item.storeName,
       settlementDate: item.settlementDate ?? item.completedAt,
       totalAmount: item.settlementAmount,
-      completedCount: item.completed ? 1 : 0,
+      completedCount: isSettlementRequestCompleted(item.requestStatus) ? 1 : 0,
       items: [item],
     })
   })
@@ -159,9 +156,10 @@ export default function SettlementHistoryPage() {
       return
     }
 
-    const nextStatus = normalizeStatus(item.transferStatus) === "완료" ? "대기" : "완료"
+    const nextStatus = getNextSettlementRequestStatus(item.requestStatus)
     const previousItems = items
-    const completedAt = nextStatus === "완료" ? new Date().toISOString() : null
+    const completed = isSettlementRequestCompleted(nextStatus)
+    const completedAt = completed ? new Date().toISOString() : null
 
     setActionErrorMessage("")
     setUpdatingIds((prev) => [...prev, item.settlementResultId])
@@ -170,8 +168,9 @@ export default function SettlementHistoryPage() {
         historyItem.settlementResultId === item.settlementResultId
           ? {
               ...historyItem,
+              requestStatus: nextStatus,
               transferStatus: nextStatus,
-              completed: nextStatus === "완료",
+              completed,
               completedAt,
             }
           : historyItem,
@@ -189,6 +188,7 @@ export default function SettlementHistoryPage() {
           historyItem.settlementResultId === item.settlementResultId
             ? {
                 ...historyItem,
+                requestStatus: updatedStatus.request_status,
                 transferStatus: updatedStatus.transfer_status,
                 completed: updatedStatus.completed,
                 completedAt: updatedStatus.completed_at,
@@ -300,6 +300,11 @@ export default function SettlementHistoryPage() {
                     <p className="mt-3 text-xs text-muted-foreground">
                       {group.completedCount}/{group.items.length}건 완료
                     </p>
+                    <p className="mt-1 text-xs font-medium text-foreground">
+                      {group.completedCount === group.items.length
+                        ? "전체 정산완료"
+                        : "송금대기"}
+                    </p>
                   </div>
 
                   <div className="divide-y divide-border">
@@ -313,8 +318,8 @@ export default function SettlementHistoryPage() {
                             {item.menuName}
                           </p>
                           <p className="mt-1 text-xs text-muted-foreground">
-                            {item.participantName} · 초대 {normalizeStatus(item.inviteStatus)} ·{" "}
-                            {item.completed ? "완료" : "미완료"}
+                            {item.participantName} · 초대 {normalizeInviteStatus(item.inviteStatus)} ·{" "}
+                            {isSettlementRequestCompleted(item.requestStatus) ? "완료" : "송금대기"}
                           </p>
                         </div>
                         <div className="flex shrink-0 flex-col items-end gap-1.5">
@@ -322,7 +327,7 @@ export default function SettlementHistoryPage() {
                             {formatAmount(item.settlementAmount)}
                           </p>
                           <StatusBadge
-                            status={item.transferStatus}
+                            status={item.requestStatus}
                             disabled={updatingIds.includes(item.settlementResultId)}
                             onClick={() => void handleToggleStatus(item)}
                           />
