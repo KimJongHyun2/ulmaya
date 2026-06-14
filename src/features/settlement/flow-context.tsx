@@ -20,7 +20,7 @@ import {
   saveSessionParticipants,
   saveSessionReceiptInfo,
   saveSessionSettlements,
-  updateSessionStatus,
+  updateSettlementSession,
 } from "@/features/settlement/repository"
 import type { MenuItem, ReceiptInfo } from "@/types/receipt"
 import type { Participant } from "@/types/participants"
@@ -208,22 +208,17 @@ export function SettlementFlowProvider({ children }: { children: React.ReactNode
     [persistSelectedParticipants],
   )
 
-  const setSettlementsState = useCallback(
-    (nextSettlements: SettlementItem[]) => {
-      setSettlements(nextSettlements)
-      void persistSettlements(nextSettlements)
-    },
-    [persistSettlements],
-  )
-
   const calculate = useCallback(() => {
     const nextSettlements = calculateSettlements(selectedParticipants, menuItems)
-    setSettlementsState(nextSettlements)
+    setSettlements(nextSettlements)
 
     if (sessionId) {
-      void updateSessionStatus(sessionId, "calculated")
+      void updateSettlementSession(sessionId, {
+        settlements: nextSettlements,
+        status: "calculated",
+      })
     }
-  }, [menuItems, selectedParticipants, sessionId, setSettlementsState])
+  }, [menuItems, selectedParticipants, sessionId])
 
   const markSent = useCallback(
     (participantId: number) => {
@@ -234,10 +229,13 @@ export function SettlementFlowProvider({ children }: { children: React.ReactNode
             : settlement,
         )
 
-        void persistSettlements(nextSettlements)
-
         if (sessionId) {
-          void updateSessionStatus(sessionId, "shared")
+          void updateSettlementSession(sessionId, {
+            settlements: nextSettlements,
+            status: "shared",
+          })
+        } else {
+          void persistSettlements(nextSettlements)
         }
 
         return nextSettlements

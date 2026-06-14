@@ -55,7 +55,7 @@ export default function KakaoShareScreen({
     })
     setSentIds((prev) => [...prev, settlement.participant.id])
     onSendComplete(settlement.participant.id)
-    setToastMessage(`${settlement.participant.name}님에게 전송 완료!`)
+    setToastMessage(`${settlement.participant.name}님 송금완료로 기록했습니다.`)
     setShowToast(true)
     setTimeout(() => setShowToast(false), 2000)
   }
@@ -177,7 +177,7 @@ export default function KakaoShareScreen({
               onClick={handleSendAll}
               className="w-full py-4 bg-kakao text-kakao-foreground font-semibold flex items-center justify-center gap-2 hover:brightness-95 transition-all"
             >
-              송금하기
+              송금완료
             </button>
           </div>
         </div>
@@ -185,7 +185,7 @@ export default function KakaoShareScreen({
         {/* Individual Send Buttons */}
         <div className="mt-8 space-y-3">
           <h4 className="text-sm font-semibold text-muted-foreground mb-3">
-            개별 전송
+            개별 송금완료
           </h4>
           {settlements.map((settlement) => (
             <button
@@ -210,12 +210,12 @@ export default function KakaoShareScreen({
               {sentIds.includes(settlement.participant.id) ? (
                 <div className="flex items-center gap-2 text-green-600">
                   <Check className="w-5 h-5" />
-                  <span className="text-sm font-medium">전송완료</span>
+                  <span className="text-sm font-medium">송금완료</span>
                 </div>
               ) : (
                 <div className="flex items-center gap-2 text-kakao-foreground bg-kakao px-4 py-2 rounded-lg">
                   <Send className="w-4 h-4" />
-                  <span className="text-sm font-medium">전송</span>
+                  <span className="text-sm font-medium">송금완료</span>
                 </div>
               )}
             </button>

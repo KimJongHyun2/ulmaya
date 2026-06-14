@@ -26,6 +26,50 @@ interface SupabaseErrorLike {
   hint?: string
 }
 
+export interface SettlementHistoryItem {
+  settlementResultId: string
+  receiptId: string
+  storeName: string
+  menuName: string
+  participantName: string
+  settlementAmount: number
+  transferStatus: string
+  completed: boolean
+  completedAt: string | null
+}
+
+interface SettlementResultRow {
+  settlement_result_id: string
+  receipt_id: string
+  menu_item_id: number
+  participant_id: number
+  settlement_amount: number
+  transfer_status: string
+  completed: boolean
+  completed_at: string | null
+}
+
+interface ReceiptRow {
+  receipt_id: string
+  store_id: string | null
+}
+
+interface StoreRow {
+  store_id: string
+  store_name: string
+}
+
+interface MenuItemRow {
+  receipt_id: string
+  menu_item_id: number
+  menu_name: string
+}
+
+interface ParticipantRow {
+  participant_id: number
+  name: string
+}
+
 function cloneSession(session: SettlementSession): SettlementSession {
   return JSON.parse(JSON.stringify(session)) as SettlementSession
 }
@@ -61,8 +105,400 @@ function logSupabaseFailure(
   })
 }
 
+function logSupabaseTableFailure(
+  operation: SupabaseOperation,
+  table: string,
+  error: unknown,
+  payload: unknown,
+  sessionId?: string,
+) {
+  const supabaseError = toSupabaseErrorLike(error)
+
+  console.error("[settlement repository] Supabase ERD table request failed", {
+    operation,
+    table,
+    sessionId,
+    payload,
+    message: supabaseError.message,
+    code: supabaseError.code,
+    details: supabaseError.details,
+    hint: supabaseError.hint,
+  })
+}
+
 function logSupabaseSuccess(operation: SupabaseOperation, sessionId: string) {
   console.info(`[settlement repository] Supabase ${operation} success`, sessionId)
+}
+
+function getReceiptTotal(session: SettlementSession) {
+  return session.receiptInfo.totalAmount
+    ?? session.menuItems.reduce((sum, item) => sum + Math.max(0, item.price || 0), 0)
+}
+
+function getAssignedParticipants(session: SettlementSession, assignedTo: string[]) {
+  if (assignedTo.includes("전체")) {
+    return session.selectedParticipants
+  }
+
+  return session.selectedParticipants.filter((participant) =>
+    assignedTo.includes(participant.name),
+  )
+}
+
+function getMenuSettlementParticipants(session: SettlementSession, itemId: number) {
+  const menuItem = session.menuItems.find((item) => item.id === itemId)
+
+  if (!menuItem) {
+    return []
+  }
+
+  if (menuItem.isNbbang) {
+    return session.selectedParticipants
+  }
+
+  return getAssignedParticipants(session, menuItem.assignedTo)
+}
+
+function getParticipantSettlementStatus(session: SettlementSession, participantId: number) {
+  return session.settlements.find((settlement) => settlement.participant.id === participantId)
+    ?.status
+}
+
+function buildSettlementRows(session: SettlementSession) {
+  const requestRows: Array<Record<string, unknown>> = []
+  const resultRows: Array<Record<string, unknown>> = []
+  const now = new Date().toISOString()
+
+  session.menuItems.forEach((menuItem) => {
+    const participants = getMenuSettlementParticipants(session, menuItem.id)
+
+    if (participants.length === 0) {
+      return
+    }
+
+    const amount = Math.round(menuItem.price / participants.length)
+
+    participants.forEach((participant) => {
+      const rowId = `${session.id}:${menuItem.id}:${participant.id}`
+      const isSent = getParticipantSettlementStatus(session, participant.id) === "sent"
+
+      requestRows.push({
+        settlement_request_id: rowId,
+        menu_item_id: menuItem.id,
+        receipt_id: session.id,
+        participant_id: participant.id,
+        requested_amount: amount,
+        request_method: "카카오페이",
+        request_status: isSent ? "완료" : "대기",
+        request_message: `${session.receiptInfo.storeName} 정산 요청`,
+      })
+
+      resultRows.push({
+        settlement_result_id: rowId,
+        menu_item_id: menuItem.id,
+        receipt_id: session.id,
+        participant_id: participant.id,
+        settlement_amount: amount,
+        invite_status: "초대완료",
+        transfer_status: isSent ? "완료" : "대기",
+        completed: isSent,
+        completed_at: isSent ? now : null,
+      })
+    })
+  })
+
+  return { requestRows, resultRows }
+}
+
+async function syncSettlementRelationalData(session: SettlementSession) {
+  if (!supabase) {
+    logSupabaseNotConfigured()
+    return
+  }
+
+  if (session.settlements.length === 0) {
+    return
+  }
+
+  try {
+    const storeId = session.id
+    const { requestRows, resultRows } = buildSettlementRows(session)
+
+    const { error: storeError } = await supabase
+      .from("stores")
+      .upsert({
+        store_id: storeId,
+        store_name: session.receiptInfo.storeName || "미확인 가게",
+        address: session.receiptInfo.location || null,
+        phone: null,
+      })
+
+    if (storeError) {
+      logSupabaseFailure("insert", storeError, session.id)
+      return
+    }
+
+    const { error: receiptError } = await supabase
+      .from("receipts")
+      .upsert({
+        receipt_id: session.id,
+        image_path: session.receiptInfo.imageUrl ?? session.receiptInfo.imagePreview ?? null,
+        ocr_raw_text: session.receiptInfo.rawText ?? null,
+        total_amount: getReceiptTotal(session),
+        store_id: storeId,
+        user_id: null,
+      })
+
+    if (receiptError) {
+      logSupabaseFailure("insert", receiptError, session.id)
+      return
+    }
+
+    if (session.selectedParticipants.length > 0) {
+      const { error: participantError } = await supabase
+        .from("participants")
+        .upsert(
+          session.selectedParticipants.map((participant) => ({
+            participant_id: participant.id,
+            name: participant.name,
+            contact: null,
+            kakao_linked: Boolean(participant.imageUrl),
+            profile_image: participant.imageUrl ?? null,
+          })),
+        )
+
+      if (participantError) {
+        logSupabaseFailure("insert", participantError, session.id)
+        return
+      }
+    }
+
+    await supabase.from("settlement_results").delete().eq("receipt_id", session.id)
+    await supabase.from("settlement_requests").delete().eq("receipt_id", session.id)
+    await supabase.from("menu_items").delete().eq("receipt_id", session.id)
+
+    if (session.menuItems.length > 0) {
+      const { error: menuError } = await supabase
+        .from("menu_items")
+        .insert(
+          session.menuItems.map((menuItem) => ({
+            menu_item_id: menuItem.id,
+            receipt_id: session.id,
+            menu_name: menuItem.name,
+            unit_price: menuItem.price,
+            quantity: 1,
+            amount: menuItem.price,
+            edited: false,
+          })),
+        )
+
+      if (menuError) {
+        logSupabaseFailure("insert", menuError, session.id)
+        return
+      }
+    }
+
+    if (requestRows.length > 0) {
+      const { error: requestError } = await supabase
+        .from("settlement_requests")
+        .insert(requestRows)
+
+      if (requestError) {
+        logSupabaseFailure("insert", requestError, session.id)
+        return
+      }
+    }
+
+    if (resultRows.length > 0) {
+      const { error: resultError } = await supabase
+        .from("settlement_results")
+        .insert(resultRows)
+
+      if (resultError) {
+        logSupabaseFailure("insert", resultError, session.id)
+        return
+      }
+    }
+
+    console.info("[settlement repository] ERD tables sync success", session.id)
+  } catch (error) {
+    logSupabaseFailure("insert", error, session.id)
+  }
+}
+
+async function syncSettlementRelationalDataWithDiagnostics(session: SettlementSession) {
+  if (!supabase) {
+    logSupabaseNotConfigured()
+    return
+  }
+
+  if (session.settlements.length === 0) {
+    return
+  }
+
+  const storeId = session.id
+  const { requestRows, resultRows } = buildSettlementRows(session)
+
+  try {
+    const storePayload = {
+      store_id: storeId,
+      store_name: session.receiptInfo.storeName || "Unknown store",
+      address: session.receiptInfo.location || null,
+      phone: null,
+    }
+    const { error: storeError } = await supabase.from("stores").upsert(storePayload)
+
+    if (storeError) {
+      logSupabaseTableFailure("insert", "stores", storeError, storePayload, session.id)
+      return
+    }
+
+    const receiptPayload = {
+      receipt_id: session.id,
+      image_path: session.receiptInfo.imageUrl ?? session.receiptInfo.imagePreview ?? null,
+      ocr_raw_text: session.receiptInfo.rawText ?? null,
+      total_amount: getReceiptTotal(session),
+      store_id: storeId,
+      user_id: null,
+    }
+    const { error: receiptError } = await supabase.from("receipts").upsert(receiptPayload)
+
+    if (receiptError) {
+      logSupabaseTableFailure("insert", "receipts", receiptError, receiptPayload, session.id)
+      return
+    }
+
+    const deleteResultsPayload = { receipt_id: session.id }
+    const { error: deleteResultsError } = await supabase
+      .from("settlement_results")
+      .delete()
+      .eq("receipt_id", session.id)
+
+    if (deleteResultsError) {
+      logSupabaseTableFailure(
+        "delete",
+        "settlement_results",
+        deleteResultsError,
+        deleteResultsPayload,
+        session.id,
+      )
+      return
+    }
+
+    const deleteRequestsPayload = { receipt_id: session.id }
+    const { error: deleteRequestsError } = await supabase
+      .from("settlement_requests")
+      .delete()
+      .eq("receipt_id", session.id)
+
+    if (deleteRequestsError) {
+      logSupabaseTableFailure(
+        "delete",
+        "settlement_requests",
+        deleteRequestsError,
+        deleteRequestsPayload,
+        session.id,
+      )
+      return
+    }
+
+    const deleteMenuPayload = { receipt_id: session.id }
+    const { error: deleteMenuError } = await supabase
+      .from("menu_items")
+      .delete()
+      .eq("receipt_id", session.id)
+
+    if (deleteMenuError) {
+      logSupabaseTableFailure(
+        "delete",
+        "menu_items",
+        deleteMenuError,
+        deleteMenuPayload,
+        session.id,
+      )
+      return
+    }
+
+    if (session.menuItems.length > 0) {
+      const menuPayload = session.menuItems.map((menuItem) => ({
+        menu_item_id: menuItem.id,
+        receipt_id: session.id,
+        menu_name: menuItem.name,
+        unit_price: menuItem.price,
+        quantity: 1,
+        amount: menuItem.price,
+        edited: false,
+      }))
+      const { error: menuError } = await supabase.from("menu_items").insert(menuPayload)
+
+      if (menuError) {
+        logSupabaseTableFailure("insert", "menu_items", menuError, menuPayload, session.id)
+        return
+      }
+    }
+
+    if (session.selectedParticipants.length > 0) {
+      const participantPayload = session.selectedParticipants.map((participant) => ({
+        participant_id: participant.id,
+        name: participant.name,
+        contact: null,
+        kakao_linked: Boolean(participant.imageUrl),
+        profile_image: participant.imageUrl ?? null,
+      }))
+      const { error: participantError } = await supabase
+        .from("participants")
+        .upsert(participantPayload)
+
+      if (participantError) {
+        logSupabaseTableFailure(
+          "insert",
+          "participants",
+          participantError,
+          participantPayload,
+          session.id,
+        )
+        return
+      }
+    }
+
+    if (requestRows.length > 0) {
+      const { error: requestError } = await supabase
+        .from("settlement_requests")
+        .insert(requestRows)
+
+      if (requestError) {
+        logSupabaseTableFailure(
+          "insert",
+          "settlement_requests",
+          requestError,
+          requestRows,
+          session.id,
+        )
+        return
+      }
+    }
+
+    if (resultRows.length > 0) {
+      const { error: resultError } = await supabase
+        .from("settlement_results")
+        .insert(resultRows)
+
+      if (resultError) {
+        logSupabaseTableFailure(
+          "insert",
+          "settlement_results",
+          resultError,
+          resultRows,
+          session.id,
+        )
+        return
+      }
+    }
+
+    console.info("[settlement repository] ERD tables sync success", session.id)
+  } catch (error) {
+    logSupabaseTableFailure("insert", "unknown", error, { receipt_id: session.id }, session.id)
+  }
 }
 
 function parseTimestamp(value: string | null | undefined, fallback: number) {
@@ -132,8 +568,10 @@ async function insertSupabaseSession(session: SettlementSession) {
     }
 
     if (data) {
+      const savedSession = rowToSession(data)
       logSupabaseSuccess("insert", data.id)
-      return rowToSession(data)
+      await syncSettlementRelationalDataWithDiagnostics(savedSession)
+      return savedSession
     }
 
     return null
@@ -194,8 +632,10 @@ async function updateSupabaseSession(sessionId: string, session: SettlementSessi
     }
 
     if (data) {
+      const savedSession = rowToSession(data)
       logSupabaseSuccess("update", data.id)
-      return rowToSession(data)
+      await syncSettlementRelationalDataWithDiagnostics(savedSession)
+      return savedSession
     }
 
     return null
@@ -274,6 +714,112 @@ export async function deleteSettlementSession(sessionId: string) {
   const deletedFromMemory = memorySessions.delete(sessionId)
 
   return deleted || deletedFromMemory || !supabase
+}
+
+export async function listSettlementHistory(): Promise<SettlementHistoryItem[]> {
+  if (!supabase) {
+    logSupabaseNotConfigured()
+    return []
+  }
+
+  try {
+    const { data: resultRows, error: resultError } = await supabase
+      .from("settlement_results")
+      .select(
+        "settlement_result_id,receipt_id,menu_item_id,participant_id,settlement_amount,transfer_status,completed,completed_at",
+      )
+      .order("completed_at", { ascending: false, nullsFirst: false })
+
+    if (resultError) {
+      logSupabaseFailure("select", resultError)
+      return []
+    }
+
+    const results = (resultRows ?? []) as SettlementResultRow[]
+    const receiptIds = Array.from(new Set(results.map((row) => row.receipt_id)))
+    const participantIds = Array.from(new Set(results.map((row) => row.participant_id)))
+
+    const { data: receiptRows, error: receiptError } = await supabase
+      .from("receipts")
+      .select("receipt_id,store_id")
+      .in("receipt_id", receiptIds.length > 0 ? receiptIds : [""])
+
+    if (receiptError) {
+      logSupabaseFailure("select", receiptError)
+      return []
+    }
+
+    const receipts = (receiptRows ?? []) as ReceiptRow[]
+    const storeIds = Array.from(
+      new Set(receipts.map((row) => row.store_id).filter((storeId): storeId is string => Boolean(storeId))),
+    )
+
+    const { data: storeRows, error: storeError } = await supabase
+      .from("stores")
+      .select("store_id,store_name")
+      .in("store_id", storeIds.length > 0 ? storeIds : [""])
+
+    if (storeError) {
+      logSupabaseFailure("select", storeError)
+      return []
+    }
+
+    const { data: menuRows, error: menuError } = await supabase
+      .from("menu_items")
+      .select("receipt_id,menu_item_id,menu_name")
+      .in("receipt_id", receiptIds.length > 0 ? receiptIds : [""])
+
+    if (menuError) {
+      logSupabaseFailure("select", menuError)
+      return []
+    }
+
+    const { data: participantRows, error: participantError } = await supabase
+      .from("participants")
+      .select("participant_id,name")
+      .in("participant_id", participantIds.length > 0 ? participantIds : [-1])
+
+    if (participantError) {
+      logSupabaseFailure("select", participantError)
+      return []
+    }
+
+    const receiptMap = new Map(receipts.map((row) => [row.receipt_id, row]))
+    const storeMap = new Map(((storeRows ?? []) as StoreRow[]).map((row) => [row.store_id, row]))
+    const menuMap = new Map(
+      ((menuRows ?? []) as MenuItemRow[]).map((row) => [
+        `${row.receipt_id}:${row.menu_item_id}`,
+        row,
+      ]),
+    )
+    const participantMap = new Map(
+      ((participantRows ?? []) as ParticipantRow[]).map((row) => [row.participant_id, row]),
+    )
+
+    logSupabaseSuccess("select", "settlement-history")
+
+    return results.map((row) => {
+      const receipt = receiptMap.get(row.receipt_id)
+      const store = receipt?.store_id ? storeMap.get(receipt.store_id) : null
+      const menu = menuMap.get(`${row.receipt_id}:${row.menu_item_id}`)
+      const participant = participantMap.get(row.participant_id)
+
+      return {
+        settlementResultId: row.settlement_result_id,
+        receiptId: row.receipt_id,
+        storeName: store?.store_name ?? "미확인 가게",
+        menuName: menu?.menu_name ?? "미확인 메뉴",
+        participantName: participant?.name ?? "미확인 참여자",
+        settlementAmount: row.settlement_amount,
+        transferStatus: row.transfer_status,
+        completed: row.completed,
+        completedAt: row.completed_at,
+      }
+    })
+  } catch (error) {
+    logSupabaseFailure("select", error)
+    return []
+  }
 }
 
 export async function saveSessionReceiptInfo(
