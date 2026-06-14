@@ -29,10 +29,12 @@ interface SupabaseErrorLike {
 
 export interface SettlementHistoryItem {
   settlementResultId: string
+  settlementRequestIds: string[]
   receiptId: string
   storeName: string
   settlementDate?: string | null
   menuName: string
+  menuNames: string[]
   participantName: string
   settlementAmount: number
   inviteStatus?: string
@@ -56,6 +58,10 @@ interface SettlementResultRow {
 
 interface SettlementRequestRow {
   settlement_request_id: string
+  receipt_id: string
+  menu_item_id: number
+  participant_id: number
+  requested_amount: number
   request_status: string
 }
 
@@ -826,9 +832,11 @@ export async function listSettlementHistory(): Promise<SettlementHistoryItem[]> 
 
       return {
         settlementResultId: row.settlement_result_id,
+        settlementRequestIds: [row.settlement_result_id],
         receiptId: row.receipt_id,
         storeName: store?.store_name ?? "미확인 가게",
         menuName: menu?.menu_name ?? "미확인 메뉴",
+        menuNames: [menu?.menu_name ?? "미확인 메뉴"],
         participantName: participant?.name ?? "미확인 참여자",
         settlementAmount: row.settlement_amount,
         requestStatus,
@@ -850,28 +858,27 @@ export async function listSettlementHistoryCards(): Promise<SettlementHistoryIte
   }
 
   try {
-    const { data: resultRows, error: resultError } = await supabase
-      .from("settlement_results")
+    const { data: requestRows, error: requestError } = await supabase
+      .from("settlement_requests")
       .select(
-        "settlement_result_id,receipt_id,menu_item_id,participant_id,settlement_amount,invite_status,transfer_status,completed,completed_at",
+        "settlement_request_id,receipt_id,menu_item_id,participant_id,requested_amount,request_status",
       )
-      .order("completed_at", { ascending: false, nullsFirst: false })
 
-    if (resultError) {
-      logSupabaseFailure("select", resultError)
-      throw resultError
+    if (requestError) {
+      logSupabaseFailure("select", requestError)
+      throw requestError
     }
 
-    const results = (resultRows ?? []) as SettlementResultRow[]
+    const requests = (requestRows ?? []) as SettlementRequestRow[]
 
-    if (results.length === 0) {
+    if (requests.length === 0) {
       logSupabaseSuccess("select", "settlement-history")
       return []
     }
 
-    const receiptIds = Array.from(new Set(results.map((row) => row.receipt_id)))
-    const participantIds = Array.from(new Set(results.map((row) => row.participant_id)))
-    const requestIds = results.map((row) => row.settlement_result_id)
+    const receiptIds = Array.from(new Set(requests.map((row) => row.receipt_id)))
+    const participantIds = Array.from(new Set(requests.map((row) => row.participant_id)))
+    const requestIds = requests.map((row) => row.settlement_request_id)
 
     const { data: receiptRows, error: receiptError } = await supabase
       .from("receipts")
@@ -912,6 +919,18 @@ export async function listSettlementHistoryCards(): Promise<SettlementHistoryIte
       throw menuError
     }
 
+    const { data: resultRows, error: resultError } = await supabase
+      .from("settlement_results")
+      .select(
+        "settlement_result_id,receipt_id,menu_item_id,participant_id,settlement_amount,invite_status,transfer_status,completed,completed_at",
+      )
+      .in("settlement_result_id", requestIds)
+
+    if (resultError) {
+      logSupabaseFailure("select", resultError)
+      throw resultError
+    }
+
     const { data: participantRows, error: participantError } = await supabase
       .from("participants")
       .select("participant_id,name")
@@ -920,16 +939,6 @@ export async function listSettlementHistoryCards(): Promise<SettlementHistoryIte
     if (participantError) {
       logSupabaseFailure("select", participantError)
       throw participantError
-    }
-
-    const { data: requestRows, error: requestError } = await supabase
-      .from("settlement_requests")
-      .select("settlement_request_id,request_status")
-      .in("settlement_request_id", requestIds)
-
-    if (requestError) {
-      logSupabaseFailure("select", requestError)
-      throw requestError
     }
 
     const receiptMap = new Map(receipts.map((row) => [row.receipt_id, row]))
@@ -943,36 +952,89 @@ export async function listSettlementHistoryCards(): Promise<SettlementHistoryIte
     const participantMap = new Map(
       ((participantRows ?? []) as ParticipantRow[]).map((row) => [row.participant_id, row]),
     )
-    const requestMap = new Map(
-      ((requestRows ?? []) as SettlementRequestRow[]).map((row) => [
-        row.settlement_request_id,
+    const resultMap = new Map(
+      ((resultRows ?? []) as SettlementResultRow[]).map((row) => [
+        row.settlement_result_id,
         row,
       ]),
     )
+    const personMap = new Map<
+      string,
+      {
+        receiptId: string
+        storeName: string
+        settlementDate: string | null
+        participantName: string
+        settlementAmount: number
+        requestStatuses: string[]
+        settlementRequestIds: string[]
+        menuNames: string[]
+        completedAtValues: string[]
+      }
+    >()
+
+    requests.forEach((request) => {
+      const receipt = receiptMap.get(request.receipt_id)
+      const store = receipt?.store_id ? storeMap.get(receipt.store_id) : null
+      const participant = participantMap.get(request.participant_id)
+      const menu = menuMap.get(`${request.receipt_id}:${request.menu_item_id}`)
+      const result = resultMap.get(request.settlement_request_id)
+      const groupKey = `${request.receipt_id}:${request.participant_id}`
+      const existingPerson = personMap.get(groupKey)
+      const menuName = menu?.menu_name ?? "미확인 메뉴"
+
+      if (existingPerson) {
+        existingPerson.settlementAmount += request.requested_amount
+        existingPerson.requestStatuses.push(request.request_status)
+        existingPerson.settlementRequestIds.push(request.settlement_request_id)
+        if (!existingPerson.menuNames.includes(menuName)) {
+          existingPerson.menuNames.push(menuName)
+        }
+        if (result?.completed_at) {
+          existingPerson.completedAtValues.push(result.completed_at)
+        }
+        return
+      }
+
+      personMap.set(groupKey, {
+        receiptId: request.receipt_id,
+        storeName: store?.store_name ?? "미확인 가게",
+        settlementDate: receipt?.registered_at ?? null,
+        participantName: participant?.name ?? "미확인 참여자",
+        settlementAmount: request.requested_amount,
+        requestStatuses: [request.request_status],
+        settlementRequestIds: [request.settlement_request_id],
+        menuNames: [menuName],
+        completedAtValues: result?.completed_at ? [result.completed_at] : [],
+      })
+    })
 
     logSupabaseSuccess("select", "settlement-history")
 
-    return results
-      .map((row) => {
-        const receipt = receiptMap.get(row.receipt_id)
-        const store = receipt?.store_id ? storeMap.get(receipt.store_id) : null
-        const menu = menuMap.get(`${row.receipt_id}:${row.menu_item_id}`)
-        const participant = participantMap.get(row.participant_id)
-        const requestStatus = requestMap.get(row.settlement_result_id)?.request_status ?? "PENDING"
+    return Array.from(personMap.entries())
+      .map(([groupKey, person]) => {
+        const completed = person.requestStatuses.every(isSettlementRequestCompleted)
+        const requestStatus = completed ? "PAID" : "PENDING"
+        const completedAt = completed
+          ? person.completedAtValues
+              .slice()
+              .sort((first, second) => Date.parse(second) - Date.parse(first))[0] ?? null
+          : null
 
         return {
-          settlementResultId: row.settlement_result_id,
-          receiptId: row.receipt_id,
-          storeName: store?.store_name ?? "미확인 가게",
-          settlementDate: receipt?.registered_at ?? null,
-          menuName: menu?.menu_name ?? "미확인 메뉴",
-          participantName: participant?.name ?? "미확인 참여자",
-          settlementAmount: row.settlement_amount,
-          inviteStatus: row.invite_status,
+          settlementResultId: groupKey,
+          settlementRequestIds: person.settlementRequestIds,
+          receiptId: person.receiptId,
+          storeName: person.storeName,
+          settlementDate: person.settlementDate,
+          menuName: person.menuNames.join(", "),
+          menuNames: person.menuNames,
+          participantName: person.participantName,
+          settlementAmount: person.settlementAmount,
           requestStatus,
-          transferStatus: row.transfer_status,
-          completed: isSettlementRequestCompleted(requestStatus),
-          completedAt: row.completed_at,
+          transferStatus: requestStatus,
+          completed,
+          completedAt,
         }
       })
       .sort((first, second) => {
@@ -989,7 +1051,7 @@ export async function listSettlementHistoryCards(): Promise<SettlementHistoryIte
 }
 
 export async function updateSettlementStatus(
-  settlementResultId: string,
+  settlementResultIds: string | string[],
   requestStatus: SettlementPaymentStatus,
 ) {
   if (!supabase) {
@@ -997,6 +1059,8 @@ export async function updateSettlementStatus(
     throw new Error("Supabase client is not configured.")
   }
 
+  const targetIds = Array.isArray(settlementResultIds) ? settlementResultIds : [settlementResultIds]
+  const logId = targetIds.join(",")
   const completed = isSettlementRequestCompleted(requestStatus)
   const completedAt = completed ? new Date().toISOString() : null
   const resultPayload = {
@@ -1011,15 +1075,15 @@ export async function updateSettlementStatus(
   const { error: requestError } = await supabase
     .from("settlement_requests")
     .update(requestPayload)
-    .eq("settlement_request_id", settlementResultId)
+    .in("settlement_request_id", targetIds)
 
   if (requestError) {
     logSupabaseTableFailure(
       "update",
       "settlement_requests",
       requestError,
-      { settlement_request_id: settlementResultId, ...requestPayload },
-      settlementResultId,
+      { settlement_request_ids: targetIds, ...requestPayload },
+      logId,
     )
     throw requestError
   }
@@ -1027,25 +1091,28 @@ export async function updateSettlementStatus(
   const { data, error } = await supabase
     .from("settlement_results")
     .update(resultPayload)
-    .eq("settlement_result_id", settlementResultId)
+    .in("settlement_result_id", targetIds)
     .select("settlement_result_id,transfer_status,completed,completed_at")
-    .single()
 
   if (error) {
     logSupabaseTableFailure(
       "update",
       "settlement_results",
       error,
-      { settlement_result_id: settlementResultId, ...resultPayload },
-      settlementResultId,
+      { settlement_result_ids: targetIds, ...resultPayload },
+      logId,
     )
     throw error
   }
 
-  logSupabaseSuccess("update", settlementResultId)
+  logSupabaseSuccess("update", logId)
+  const firstUpdatedRow = Array.isArray(data) ? data[0] : data
 
   return {
-    ...data,
+    settlement_result_id: firstUpdatedRow?.settlement_result_id ?? targetIds[0],
+    transfer_status: firstUpdatedRow?.transfer_status ?? requestStatus,
+    completed: firstUpdatedRow?.completed ?? completed,
+    completed_at: firstUpdatedRow?.completed_at ?? completedAt,
     request_status: requestStatus,
   } as {
     settlement_result_id: string

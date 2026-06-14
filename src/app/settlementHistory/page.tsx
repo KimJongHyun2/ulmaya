@@ -48,18 +48,6 @@ function formatDate(value: string | null | undefined) {
   })
 }
 
-function normalizeInviteStatus(status: string | undefined) {
-  if (!status) {
-    return "대기"
-  }
-
-  if (status === "대기" || status.toUpperCase() === "PENDING") {
-    return "대기"
-  }
-
-  return status
-}
-
 function StatusBadge({
   status,
   disabled,
@@ -179,7 +167,7 @@ export default function SettlementHistoryPage() {
 
     try {
       const updatedStatus = await updateSettlementStatus(
-        item.settlementResultId,
+        item.settlementRequestIds,
         nextStatus,
       )
 
@@ -315,11 +303,10 @@ export default function SettlementHistoryPage() {
                       >
                         <div className="min-w-0">
                           <p className="truncate text-sm font-semibold text-foreground">
-                            {item.menuName}
+                            {item.participantName}
                           </p>
                           <p className="mt-1 text-xs text-muted-foreground">
-                            {item.participantName} · 초대 {normalizeInviteStatus(item.inviteStatus)} ·{" "}
-                            {isSettlementRequestCompleted(item.requestStatus) ? "완료" : "송금대기"}
+                            {item.menuNames.join(", ")}
                           </p>
                         </div>
                         <div className="flex shrink-0 flex-col items-end gap-1.5">
