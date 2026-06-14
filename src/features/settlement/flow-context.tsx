@@ -228,7 +228,7 @@ export function SettlementFlowProvider({ children }: { children: React.ReactNode
   const markSent = useCallback(
     (participantId: number) => {
       setSettlements((prev) => {
-        const nextSettlements = prev.map((settlement) =>
+        const nextSettlements: SettlementItem[] = prev.map((settlement) =>
           settlement.participant.id === participantId
             ? { ...settlement, status: "sent" }
             : settlement,
