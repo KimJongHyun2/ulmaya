@@ -224,36 +224,66 @@ export function shareToKakao({
   imageUrl,
   buttonText,
   link,
+  payLink,
 }: {
   title: string
   description: string
   imageUrl?: string
   buttonText: string
   link: string
+  payLink?: string
 }) {
   if (typeof window === "undefined" || !window.Kakao || !initKakao()) {
     return
   }
 
-  window.Kakao.Share.sendDefault({
+  if (typeof window.Kakao.Share?.sendDefault !== "function") {
+    console.warn("Kakao.Share.sendDefault is not available.", window.Kakao)
+    return
+  }
+
+  const detailLink = {
+    mobileWebUrl: link,
+    webUrl: link,
+  }
+  const kakaoPayLink = payLink ?? "https://pay.kakao.com/"
+  const contentLink = payLink
+    ? {
+        mobileWebUrl: kakaoPayLink,
+        webUrl: kakaoPayLink,
+      }
+    : detailLink
+  const visibleDescription = payLink
+    ? `${description}\n카드를 누르면 카카오페이 송금 안내로 이동합니다.`
+    : description
+  const payload = {
     objectType: "feed",
     content: {
       title,
-      description,
+      description: visibleDescription,
       imageUrl: imageUrl || "https://your-app.com/placeholder-logo.png",
-      link: {
-        mobileWebUrl: link,
-        webUrl: link,
-      },
+      link: contentLink,
     },
     buttons: [
       {
         title: buttonText,
+        link: detailLink,
+      },
+      {
+        title: "카카오페이 송금하기",
         link: {
-          mobileWebUrl: link,
-          webUrl: link,
+          mobileWebUrl: kakaoPayLink,
+          webUrl: kakaoPayLink,
         },
       },
     ],
+  }
+
+  console.log("Kakao.Share.sendDefault payload", payload)
+  console.log("Kakao.Share.sendDefault buttons", {
+    count: payload.buttons.length,
+    titles: payload.buttons.map((button) => button.title),
   })
+
+  window.Kakao.Share.sendDefault(payload)
 }

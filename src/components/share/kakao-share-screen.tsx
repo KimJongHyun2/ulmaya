@@ -24,13 +24,34 @@ export default function KakaoShareScreen({
   const [showToast, setShowToast] = useState(false)
   const [toastMessage, setToastMessage] = useState("")
   const [sentIds, setSentIds] = useState<number[]>([])
+  const detailLink = typeof window === "undefined" ? "" : window.location.origin
+
+  const createKakaoPayGuideLink = (receiver: string, amount: number) => {
+    if (!detailLink) {
+      return "https://pay.kakao.com/"
+    }
+
+    const params = new URLSearchParams({
+      receiver,
+      amount: String(amount),
+      returnTo: detailLink,
+    })
+
+    return `${detailLink}/pay?${params.toString()}`
+  }
 
   const handleSendToKakao = (settlement: SettlementItem) => {
+    const kakaoPayLink = createKakaoPayGuideLink(
+      settlement.participant.name,
+      settlement.amount
+    )
+
     shareToKakao({
       title: `${receiptInfo.storeName} 정산 요청`,
       description: `${settlement.participant.name}님의 정산 금액은 ${settlement.amount.toLocaleString()}원입니다.`,
-      buttonText: "정산하기",
-      link: window.location.origin, // 실제 서비스 시에는 정산 상세 페이지 링크가 들어갈 수 있습니다.
+      buttonText: "얼마야에서 확인하기",
+      link: detailLink,
+      payLink: kakaoPayLink,
     })
     setSentIds((prev) => [...prev, settlement.participant.id])
     onSendComplete(settlement.participant.id)
@@ -41,11 +62,14 @@ export default function KakaoShareScreen({
 
   const handleSendAll = () => {
     const totalAmount = settlements.reduce((sum, s) => sum + s.amount, 0)
+    const kakaoPayLink = createKakaoPayGuideLink("정산 받을 사람", totalAmount)
+
     shareToKakao({
       title: `${receiptInfo.storeName} 정산 요청`,
       description: `총 ${settlements.length}명의 정산이 진행 중입니다.\n총 금액: ${totalAmount.toLocaleString()}원`,
-      buttonText: "전체 내역 보기",
-      link: window.location.origin,
+      buttonText: "얼마야에서 확인하기",
+      link: detailLink,
+      payLink: kakaoPayLink,
     })
     
     settlements.forEach((s) => {
