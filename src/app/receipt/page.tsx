@@ -7,7 +7,7 @@ import { useSettlementFlow } from "@/features/settlement/flow-context"
 
 export default function ReceiptPage() {
   const router = useRouter()
-  const { receiptInfo, setReceiptInfo, menuItems, setMenuItems, isReady } = useSettlementFlow()
+  const { receiptInfo, menuItems, setMenuItems, isReady } = useSettlementFlow()
 
   if (!isReady) {
     return (
@@ -24,7 +24,6 @@ export default function ReceiptPage() {
       <OcrResultScreen
         receiptInfo={receiptInfo}
         menuItems={menuItems}
-        setReceiptInfo={setReceiptInfo}
         setMenuItems={setMenuItems}
         onBack={() => router.push("/")}
         onNext={() => router.push("/participants")}

@@ -7,7 +7,6 @@ import type { MenuItem, ReceiptInfo } from "@/types/receipt"
 interface OcrResultScreenProps {
   receiptInfo: ReceiptInfo
   menuItems: MenuItem[]
-  setReceiptInfo: (info: ReceiptInfo) => void
   setMenuItems: (items: MenuItem[]) => void
   onBack: () => void
   onNext: () => void
@@ -39,7 +38,6 @@ function createMenuItem(id: number): MenuItem {
 export default function OcrResultScreen({
   receiptInfo,
   menuItems,
-  setReceiptInfo,
   setMenuItems,
   onBack,
   onNext,
@@ -47,20 +45,16 @@ export default function OcrResultScreen({
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editName, setEditName] = useState("")
   const [editPrice, setEditPrice] = useState("")
-  const [isEditingTotal, setIsEditingTotal] = useState(false)
-  const [editTotalAmount, setEditTotalAmount] = useState("")
   const [notice, setNotice] = useState("")
 
   const storeName = isUnknown(receiptInfo.storeName) ? "상호 확인 필요" : receiptInfo.storeName
   const location = isUnknown(receiptInfo.location) ? "주소 확인 필요" : receiptInfo.location
   const visitedAt = isUnknown(receiptInfo.visitedAt) ? "날짜/시간 확인 필요" : receiptInfo.visitedAt
   const rawText = receiptInfo.rawText?.trim() ?? ""
-  const totalAmount = receiptInfo.totalAmount ?? 0
   const menuTotal = useMemo(
     () => menuItems.reduce((sum, item) => sum + Math.max(0, item.price || 0), 0),
     [menuItems],
   )
-  const hasTotalMismatch = totalAmount > 0 && menuTotal > 0 && totalAmount !== menuTotal
 
   const startEditing = (item: MenuItem) => {
     setNotice("")
@@ -110,23 +104,8 @@ export default function OcrResultScreen({
     setNotice("")
   }
 
-  const startEditingTotal = () => {
-    setEditTotalAmount(totalAmount > 0 ? totalAmount.toLocaleString() : "")
-    setIsEditingTotal(true)
-    setNotice("")
-  }
-
-  const saveTotalAmount = () => {
-    setReceiptInfo({
-      ...receiptInfo,
-      totalAmount: parseAmount(editTotalAmount),
-    })
-    setIsEditingTotal(false)
-    setNotice("")
-  }
-
   const handleNext = () => {
-    if (editingId !== null || isEditingTotal) {
+    if (editingId !== null) {
       setNotice("수정 중인 항목을 저장하거나 취소한 뒤 다음 단계로 이동해주세요.")
       return
     }
@@ -187,58 +166,8 @@ export default function OcrResultScreen({
           </div>
 
           <div className="mt-4 rounded-xl bg-muted/40 px-3 py-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs font-medium text-muted-foreground">메뉴 합계 / 총금액</p>
-                <p className="mt-1 text-sm font-semibold text-foreground">
-                  메뉴 합계 {formatAmount(menuTotal)} / 총금액 {formatAmount(totalAmount)}
-                </p>
-              </div>
-              {!isEditingTotal && (
-                <button
-                  onClick={startEditingTotal}
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full hover:bg-muted"
-                  aria-label="총금액 수정"
-                >
-                  <Pencil className="h-4 w-4 text-muted-foreground" />
-                </button>
-              )}
-            </div>
-
-            {isEditingTotal && (
-              <div className="mt-3 space-y-2">
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={editTotalAmount}
-                  onChange={(event) => setEditTotalAmount(event.target.value)}
-                  placeholder="총금액"
-                  className="w-full rounded-lg border border-border bg-input px-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                />
-                <div className="flex gap-2">
-                  <button
-                    onClick={saveTotalAmount}
-                    className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary py-2 font-medium text-primary-foreground"
-                  >
-                    <Check className="h-4 w-4" />
-                    저장
-                  </button>
-                  <button
-                    onClick={() => setIsEditingTotal(false)}
-                    className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-muted py-2 font-medium text-muted-foreground"
-                  >
-                    <X className="h-4 w-4" />
-                    취소
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {hasTotalMismatch && (
-              <p className="mt-3 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                메뉴 합계와 총금액이 다릅니다. 메뉴 또는 총금액을 확인해주세요.
-              </p>
-            )}
+            <p className="text-xs font-medium text-muted-foreground">총금액</p>
+            <p className="mt-1 text-2xl font-bold text-foreground">{formatAmount(menuTotal)}</p>
           </div>
         </section>
 
