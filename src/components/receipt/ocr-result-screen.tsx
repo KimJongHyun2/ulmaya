@@ -1,13 +1,13 @@
 "use client"
 
-import { useState } from "react"
-import { ArrowLeft, Calendar, Check, MapPin, Pencil, X } from "lucide-react"
-import { updateMenuItem } from "@/features/receipt/editor"
+import { useMemo, useState } from "react"
+import { ArrowLeft, Calendar, Check, MapPin, Pencil, Plus, Trash2, X } from "lucide-react"
 import type { MenuItem, ReceiptInfo } from "@/types/receipt"
 
 interface OcrResultScreenProps {
   receiptInfo: ReceiptInfo
   menuItems: MenuItem[]
+  setReceiptInfo: (info: ReceiptInfo) => void
   setMenuItems: (items: MenuItem[]) => void
   onBack: () => void
   onNext: () => void
@@ -15,12 +15,31 @@ interface OcrResultScreenProps {
 
 function isUnknown(value?: string) {
   if (!value) return true
-  return value.includes("확인 필요")
+  return value.includes("확인 필요") || value.includes("?뺤씤 ?꾩슂")
+}
+
+function parseAmount(value: string) {
+  return Number.parseInt(value.replace(/[^\d]/g, ""), 10) || 0
+}
+
+function formatAmount(value: number) {
+  return `${value.toLocaleString()}원`
+}
+
+function createMenuItem(id: number): MenuItem {
+  return {
+    id,
+    name: "",
+    price: 0,
+    assignedTo: [],
+    isNbbang: false,
+  }
 }
 
 export default function OcrResultScreen({
   receiptInfo,
   menuItems,
+  setReceiptInfo,
   setMenuItems,
   onBack,
   onNext,
@@ -28,27 +47,103 @@ export default function OcrResultScreen({
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editName, setEditName] = useState("")
   const [editPrice, setEditPrice] = useState("")
+  const [isEditingTotal, setIsEditingTotal] = useState(false)
+  const [editTotalAmount, setEditTotalAmount] = useState("")
+  const [notice, setNotice] = useState("")
 
   const storeName = isUnknown(receiptInfo.storeName) ? "상호 확인 필요" : receiptInfo.storeName
   const location = isUnknown(receiptInfo.location) ? "주소 확인 필요" : receiptInfo.location
   const visitedAt = isUnknown(receiptInfo.visitedAt) ? "날짜/시간 확인 필요" : receiptInfo.visitedAt
   const rawText = receiptInfo.rawText?.trim() ?? ""
   const totalAmount = receiptInfo.totalAmount ?? 0
+  const menuTotal = useMemo(
+    () => menuItems.reduce((sum, item) => sum + Math.max(0, item.price || 0), 0),
+    [menuItems],
+  )
+  const hasTotalMismatch = totalAmount > 0 && menuTotal > 0 && totalAmount !== menuTotal
 
   const startEditing = (item: MenuItem) => {
+    setNotice("")
     setEditingId(item.id)
     setEditName(item.name)
-    setEditPrice(item.price.toString())
+    setEditPrice(item.price > 0 ? item.price.toLocaleString() : "")
   }
 
   const saveEdit = () => {
     if (editingId === null) return
-    setMenuItems(updateMenuItem(menuItems, editingId, editName, editPrice))
+
+    const nextName = editName.trim()
+    const nextPrice = parseAmount(editPrice)
+
+    setMenuItems(
+      menuItems.map((item) =>
+        item.id === editingId
+          ? { ...item, name: nextName, price: nextPrice }
+          : item,
+      ),
+    )
     setEditingId(null)
+    setNotice("")
   }
 
   const cancelEdit = () => {
     setEditingId(null)
+    setNotice("")
+  }
+
+  const addMenuItem = () => {
+    const nextId = Math.max(0, ...menuItems.map((item) => item.id)) + 1
+    const nextItem = createMenuItem(nextId)
+
+    setMenuItems([...menuItems, nextItem])
+    setEditingId(nextId)
+    setEditName("")
+    setEditPrice("")
+    setNotice("")
+  }
+
+  const deleteMenuItem = (id: number) => {
+    setMenuItems(menuItems.filter((item) => item.id !== id))
+    if (editingId === id) {
+      setEditingId(null)
+    }
+    setNotice("")
+  }
+
+  const startEditingTotal = () => {
+    setEditTotalAmount(totalAmount > 0 ? totalAmount.toLocaleString() : "")
+    setIsEditingTotal(true)
+    setNotice("")
+  }
+
+  const saveTotalAmount = () => {
+    setReceiptInfo({
+      ...receiptInfo,
+      totalAmount: parseAmount(editTotalAmount),
+    })
+    setIsEditingTotal(false)
+    setNotice("")
+  }
+
+  const handleNext = () => {
+    if (editingId !== null || isEditingTotal) {
+      setNotice("수정 중인 항목을 저장하거나 취소한 뒤 다음 단계로 이동해주세요.")
+      return
+    }
+
+    const invalidItem = menuItems.find((item) => !item.name.trim() || item.price <= 0)
+
+    if (invalidItem) {
+      setNotice("메뉴명 없는 항목이나 0원 이하 금액이 있습니다. 메뉴를 확인해주세요.")
+      return
+    }
+
+    if (menuItems.length === 0) {
+      setNotice("메뉴를 1개 이상 추가해주세요.")
+      return
+    }
+
+    onNext()
   }
 
   return (
@@ -66,7 +161,7 @@ export default function OcrResultScreen({
         </div>
       </div>
 
-      <div className="space-y-6 px-4 py-5">
+      <div className="space-y-5 px-4 py-5">
         <section className="rounded-2xl border border-border bg-card p-5 shadow-sm">
           <h3 className="mb-4 text-xl font-bold">{storeName}</h3>
 
@@ -89,11 +184,60 @@ export default function OcrResultScreen({
               <Calendar className="mt-0.5 h-4 w-4 shrink-0" />
               <span>{visitedAt}</span>
             </div>
-            {totalAmount > 0 && (
-              <div className="flex items-center justify-between rounded-xl bg-muted/40 px-3 py-2 text-foreground">
-                <span className="font-semibold">총금액</span>
-                <span className="font-bold">{totalAmount.toLocaleString()}원</span>
+          </div>
+
+          <div className="mt-4 rounded-xl bg-muted/40 px-3 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-medium text-muted-foreground">메뉴 합계 / 총금액</p>
+                <p className="mt-1 text-sm font-semibold text-foreground">
+                  메뉴 합계 {formatAmount(menuTotal)} / 총금액 {formatAmount(totalAmount)}
+                </p>
               </div>
+              {!isEditingTotal && (
+                <button
+                  onClick={startEditingTotal}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full hover:bg-muted"
+                  aria-label="총금액 수정"
+                >
+                  <Pencil className="h-4 w-4 text-muted-foreground" />
+                </button>
+              )}
+            </div>
+
+            {isEditingTotal && (
+              <div className="mt-3 space-y-2">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={editTotalAmount}
+                  onChange={(event) => setEditTotalAmount(event.target.value)}
+                  placeholder="총금액"
+                  className="w-full rounded-lg border border-border bg-input px-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={saveTotalAmount}
+                    className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary py-2 font-medium text-primary-foreground"
+                  >
+                    <Check className="h-4 w-4" />
+                    저장
+                  </button>
+                  <button
+                    onClick={() => setIsEditingTotal(false)}
+                    className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-muted py-2 font-medium text-muted-foreground"
+                  >
+                    <X className="h-4 w-4" />
+                    취소
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {hasTotalMismatch && (
+              <p className="mt-3 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                메뉴 합계와 총금액이 다릅니다. 메뉴 또는 총금액을 확인해주세요.
+              </p>
             )}
           </div>
         </section>
@@ -106,11 +250,20 @@ export default function OcrResultScreen({
         </section>
 
         <section>
-          <h4 className="mb-3 px-1 text-sm font-semibold text-muted-foreground">메뉴 목록</h4>
+          <div className="mb-3 flex items-center justify-between gap-3 px-1">
+            <h4 className="text-sm font-semibold text-muted-foreground">메뉴 목록</h4>
+            <button
+              onClick={addMenuItem}
+              className="flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground"
+            >
+              <Plus className="h-4 w-4" />
+              메뉴 추가
+            </button>
+          </div>
 
           {menuItems.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-border bg-card p-5 text-sm text-muted-foreground">
-              메뉴 후보를 찾지 못했습니다. OCR 원문을 확인한 뒤 다시 시도하거나 다음 단계에서 직접 보정이 필요합니다.
+              메뉴 후보를 찾지 못했습니다. OCR 원문을 확인한 뒤 메뉴를 직접 추가해주세요.
             </div>
           ) : (
             <div className="space-y-3">
@@ -122,12 +275,15 @@ export default function OcrResultScreen({
                         type="text"
                         value={editName}
                         onChange={(event) => setEditName(event.target.value)}
+                        placeholder="메뉴명"
                         className="w-full rounded-lg border border-border bg-input px-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                       />
                       <input
-                        type="number"
+                        type="text"
+                        inputMode="numeric"
                         value={editPrice}
                         onChange={(event) => setEditPrice(event.target.value)}
+                        placeholder="금액"
                         className="w-full rounded-lg border border-border bg-input px-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                       />
                       <div className="flex gap-2">
@@ -149,15 +305,24 @@ export default function OcrResultScreen({
                     </div>
                   ) : (
                     <div className="flex items-center justify-between gap-3">
-                      <p className="min-w-0 flex-1 font-semibold text-foreground">{item.name}</p>
-                      <div className="flex shrink-0 items-center gap-3">
-                        <p className="font-bold text-foreground">{item.price.toLocaleString()}원</p>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-semibold text-foreground">{item.name || "메뉴명 없음"}</p>
+                        <p className="mt-1 text-sm font-bold text-foreground">{formatAmount(item.price)}</p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
                         <button
                           onClick={() => startEditing(item)}
                           className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-muted"
-                          aria-label={`${item.name} 수정`}
+                          aria-label={`${item.name || "메뉴"} 수정`}
                         >
                           <Pencil className="h-4 w-4 text-muted-foreground" />
+                        </button>
+                        <button
+                          onClick={() => deleteMenuItem(item.id)}
+                          className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-muted"
+                          aria-label={`${item.name || "메뉴"} 삭제`}
+                        >
+                          <Trash2 className="h-4 w-4 text-muted-foreground" />
                         </button>
                       </div>
                     </div>
@@ -166,13 +331,19 @@ export default function OcrResultScreen({
               ))}
             </div>
           )}
+
+          {notice && (
+            <p className="mt-3 rounded-xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
+              {notice}
+            </p>
+          )}
         </section>
       </div>
 
       <div className="sticky bottom-0 border-t border-border bg-background p-4">
         <button
-          onClick={onNext}
-          className="w-full rounded-2xl bg-primary py-4 text-lg font-semibold text-primary-foreground shadow-lg shadow-primary/20 active:scale-[0.98] transition-transform"
+          onClick={handleNext}
+          className="w-full rounded-2xl bg-primary py-4 text-lg font-semibold text-primary-foreground shadow-lg shadow-primary/20 transition-transform active:scale-[0.98]"
         >
           참여자 선택
         </button>

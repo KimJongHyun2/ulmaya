@@ -8,7 +8,7 @@ export function updateMenuItem(
 ): MenuItem[] {
   return menuItems.map((item) =>
     item.id === editingId
-      ? { ...item, name: nextName, price: Number.parseInt(nextPrice, 10) || 0 }
+      ? { ...item, name: nextName, price: Number.parseInt(nextPrice.replace(/[^\d]/g, ""), 10) || 0 }
       : item,
   )
 }
