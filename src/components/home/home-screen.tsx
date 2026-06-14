@@ -1,15 +1,20 @@
 "use client"
 
-import { Camera, ImageIcon, LogIn, LogOut, Receipt } from "lucide-react"
+import { Camera, ImageIcon, ListChecks, LogIn, LogOut, Receipt } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/common/ui/avatar"
 import { useUser } from "@/features/auth/user-context"
 
 interface HomeScreenProps {
   onCameraClick: () => void
   onUploadClick: () => void
+  onHistoryClick: () => void
 }
 
-export default function HomeScreen({ onCameraClick, onUploadClick }: HomeScreenProps) {
+export default function HomeScreen({
+  onCameraClick,
+  onUploadClick,
+  onHistoryClick,
+}: HomeScreenProps) {
   const { user, isLoading, logout } = useUser()
 
   const handleLogout = async () => {
@@ -92,6 +97,14 @@ export default function HomeScreen({ onCameraClick, onUploadClick }: HomeScreenP
         >
           <ImageIcon className="w-6 h-6" />
           사진 올리기
+        </button>
+
+        <button
+          onClick={onHistoryClick}
+          className="w-full py-4 px-6 bg-muted/40 text-foreground rounded-2xl font-semibold text-base flex items-center justify-center gap-3 border border-border active:scale-[0.98] transition-transform"
+        >
+          <ListChecks className="w-5 h-5" />
+          정산 관리
         </button>
       </div>
     </div>

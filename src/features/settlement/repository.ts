@@ -30,9 +30,11 @@ export interface SettlementHistoryItem {
   settlementResultId: string
   receiptId: string
   storeName: string
+  settlementDate?: string | null
   menuName: string
   participantName: string
   settlementAmount: number
+  inviteStatus?: string
   transferStatus: string
   completed: boolean
   completedAt: string | null
@@ -44,6 +46,7 @@ interface SettlementResultRow {
   menu_item_id: number
   participant_id: number
   settlement_amount: number
+  invite_status: string
   transfer_status: string
   completed: boolean
   completed_at: string | null
@@ -52,6 +55,7 @@ interface SettlementResultRow {
 interface ReceiptRow {
   receipt_id: string
   store_id: string | null
+  registered_at: string | null
 }
 
 interface StoreRow {
@@ -819,6 +823,132 @@ export async function listSettlementHistory(): Promise<SettlementHistoryItem[]> 
   } catch (error) {
     logSupabaseFailure("select", error)
     return []
+  }
+}
+
+export async function listSettlementHistoryCards(): Promise<SettlementHistoryItem[]> {
+  if (!supabase) {
+    logSupabaseNotConfigured()
+    throw new Error("Supabase client is not configured.")
+  }
+
+  try {
+    const { data: resultRows, error: resultError } = await supabase
+      .from("settlement_results")
+      .select(
+        "settlement_result_id,receipt_id,menu_item_id,participant_id,settlement_amount,invite_status,transfer_status,completed,completed_at",
+      )
+      .order("completed_at", { ascending: false, nullsFirst: false })
+
+    if (resultError) {
+      logSupabaseFailure("select", resultError)
+      throw resultError
+    }
+
+    const results = (resultRows ?? []) as SettlementResultRow[]
+
+    if (results.length === 0) {
+      logSupabaseSuccess("select", "settlement-history")
+      return []
+    }
+
+    const receiptIds = Array.from(new Set(results.map((row) => row.receipt_id)))
+    const participantIds = Array.from(new Set(results.map((row) => row.participant_id)))
+
+    const { data: receiptRows, error: receiptError } = await supabase
+      .from("receipts")
+      .select("receipt_id,store_id,registered_at")
+      .in("receipt_id", receiptIds)
+
+    if (receiptError) {
+      logSupabaseFailure("select", receiptError)
+      throw receiptError
+    }
+
+    const receipts = (receiptRows ?? []) as ReceiptRow[]
+    const storeIds = Array.from(
+      new Set(
+        receipts
+          .map((row) => row.store_id)
+          .filter((storeId): storeId is string => Boolean(storeId)),
+      ),
+    )
+
+    const { data: storeRows, error: storeError } = await supabase
+      .from("stores")
+      .select("store_id,store_name")
+      .in("store_id", storeIds.length > 0 ? storeIds : [""])
+
+    if (storeError) {
+      logSupabaseFailure("select", storeError)
+      throw storeError
+    }
+
+    const { data: menuRows, error: menuError } = await supabase
+      .from("menu_items")
+      .select("receipt_id,menu_item_id,menu_name")
+      .in("receipt_id", receiptIds)
+
+    if (menuError) {
+      logSupabaseFailure("select", menuError)
+      throw menuError
+    }
+
+    const { data: participantRows, error: participantError } = await supabase
+      .from("participants")
+      .select("participant_id,name")
+      .in("participant_id", participantIds.length > 0 ? participantIds : [-1])
+
+    if (participantError) {
+      logSupabaseFailure("select", participantError)
+      throw participantError
+    }
+
+    const receiptMap = new Map(receipts.map((row) => [row.receipt_id, row]))
+    const storeMap = new Map(((storeRows ?? []) as StoreRow[]).map((row) => [row.store_id, row]))
+    const menuMap = new Map(
+      ((menuRows ?? []) as MenuItemRow[]).map((row) => [
+        `${row.receipt_id}:${row.menu_item_id}`,
+        row,
+      ]),
+    )
+    const participantMap = new Map(
+      ((participantRows ?? []) as ParticipantRow[]).map((row) => [row.participant_id, row]),
+    )
+
+    logSupabaseSuccess("select", "settlement-history")
+
+    return results
+      .map((row) => {
+        const receipt = receiptMap.get(row.receipt_id)
+        const store = receipt?.store_id ? storeMap.get(receipt.store_id) : null
+        const menu = menuMap.get(`${row.receipt_id}:${row.menu_item_id}`)
+        const participant = participantMap.get(row.participant_id)
+
+        return {
+          settlementResultId: row.settlement_result_id,
+          receiptId: row.receipt_id,
+          storeName: store?.store_name ?? "미확인 가게",
+          settlementDate: receipt?.registered_at ?? null,
+          menuName: menu?.menu_name ?? "미확인 메뉴",
+          participantName: participant?.name ?? "미확인 참여자",
+          settlementAmount: row.settlement_amount,
+          inviteStatus: row.invite_status,
+          transferStatus: row.transfer_status,
+          completed: row.completed,
+          completedAt: row.completed_at,
+        }
+      })
+      .sort((first, second) => {
+        const firstTime = Date.parse(first.settlementDate ?? first.completedAt ?? "")
+        const secondTime = Date.parse(second.settlementDate ?? second.completedAt ?? "")
+
+        return (Number.isFinite(secondTime) ? secondTime : 0)
+          - (Number.isFinite(firstTime) ? firstTime : 0)
+      })
+  } catch (error) {
+    logSupabaseFailure("select", error)
+    throw error
   }
 }
 

@@ -12,6 +12,7 @@ export default function HomePage() {
       <HomeScreen
         onCameraClick={() => router.push("/scan")}
         onUploadClick={() => router.push("/scan")}
+        onHistoryClick={() => router.push("/settlementHistory")}
       />
     </MobileAppShell>
   )

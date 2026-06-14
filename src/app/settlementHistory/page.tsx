@@ -1,21 +1,30 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { ArrowLeft, RefreshCw } from "lucide-react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { ArrowLeft, CalendarDays, ReceiptText, RefreshCw } from "lucide-react"
 import { useRouter } from "next/navigation"
 import MobileAppShell from "@/components/common/mobile-app-shell"
 import {
-  listSettlementHistory,
+  listSettlementHistoryCards,
   type SettlementHistoryItem,
 } from "@/features/settlement/repository"
+
+interface SettlementHistoryGroup {
+  receiptId: string
+  storeName: string
+  settlementDate: string | null
+  totalAmount: number
+  completedCount: number
+  items: SettlementHistoryItem[]
+}
 
 function formatAmount(value: number) {
   return `${value.toLocaleString()}원`
 }
 
-function formatDate(value: string | null) {
+function formatDate(value: string | null | undefined) {
   if (!value) {
-    return "-"
+    return "날짜 정보 없음"
   }
 
   const date = new Date(value)
@@ -33,31 +42,112 @@ function formatDate(value: string | null) {
   })
 }
 
+function isCompletedStatus(status: string) {
+  return status === "완료" || status.toUpperCase() === "COMPLETED"
+}
+
+function normalizeStatus(status: string | undefined) {
+  if (!status) {
+    return "대기"
+  }
+
+  if (isCompletedStatus(status)) {
+    return "완료"
+  }
+
+  if (status === "대기" || status.toUpperCase() === "PENDING") {
+    return "대기"
+  }
+
+  return status
+}
+
+function StatusBadge({ status }: { status: string | undefined }) {
+  const normalizedStatus = normalizeStatus(status)
+  const isComplete = normalizedStatus === "완료"
+
+  return (
+    <span
+      className={`inline-flex h-6 items-center rounded-full px-2.5 text-xs font-semibold ${
+        isComplete
+          ? "bg-emerald-100 text-emerald-700"
+          : "bg-amber-100 text-amber-700"
+      }`}
+    >
+      {normalizedStatus}
+    </span>
+  )
+}
+
+function groupHistoryItems(items: SettlementHistoryItem[]) {
+  const groupMap = new Map<string, SettlementHistoryGroup>()
+
+  items.forEach((item) => {
+    const existingGroup = groupMap.get(item.receiptId)
+
+    if (existingGroup) {
+      existingGroup.items.push(item)
+      existingGroup.totalAmount += item.settlementAmount
+      existingGroup.completedCount += item.completed ? 1 : 0
+      return
+    }
+
+    groupMap.set(item.receiptId, {
+      receiptId: item.receiptId,
+      storeName: item.storeName,
+      settlementDate: item.settlementDate ?? item.completedAt,
+      totalAmount: item.settlementAmount,
+      completedCount: item.completed ? 1 : 0,
+      items: [item],
+    })
+  })
+
+  return Array.from(groupMap.values()).sort((first, second) => {
+    const firstTime = Date.parse(first.settlementDate ?? "")
+    const secondTime = Date.parse(second.settlementDate ?? "")
+
+    return (Number.isFinite(secondTime) ? secondTime : 0)
+      - (Number.isFinite(firstTime) ? firstTime : 0)
+  })
+}
+
 export default function SettlementHistoryPage() {
   const router = useRouter()
   const [items, setItems] = useState<SettlementHistoryItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [errorMessage, setErrorMessage] = useState("")
 
-  const loadHistory = async () => {
+  const groups = useMemo(() => groupHistoryItems(items), [items])
+
+  const loadHistory = useCallback(async () => {
     setIsLoading(true)
-    const nextItems = await listSettlementHistory()
-    setItems(nextItems)
-    setIsLoading(false)
-  }
+    setErrorMessage("")
+
+    try {
+      const nextItems = await listSettlementHistoryCards()
+      setItems(nextItems)
+    } catch (error) {
+      console.error("[settlement history] Failed to load history.", error)
+      setErrorMessage("정산 기록을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.")
+      setItems([])
+    } finally {
+      setIsLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
     void loadHistory()
-  }, [])
+  }, [loadHistory])
 
   return (
     <MobileAppShell>
       <div className="flex min-h-screen flex-col bg-background">
         <div className="sticky top-0 z-10 border-b border-border bg-background/95 px-4 py-4 backdrop-blur-sm">
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={() => router.push("/")}
-              className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-muted"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full hover:bg-muted"
               aria-label="이전 화면"
             >
               <ArrowLeft className="h-5 w-5" />
@@ -65,76 +155,105 @@ export default function SettlementHistoryPage() {
             <div className="min-w-0 flex-1">
               <h1 className="text-lg font-bold text-foreground">정산 기록</h1>
               <p className="text-xs text-muted-foreground">
-                송금 완료 여부와 완료 시각을 확인합니다.
+                완료된 송금과 대기 중인 정산을 확인합니다.
               </p>
             </div>
             <button
               type="button"
               onClick={() => void loadHistory()}
-              className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-muted"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full hover:bg-muted disabled:opacity-50"
+              disabled={isLoading}
               aria-label="새로고침"
             >
-              <RefreshCw className="h-4 w-4" />
+              <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
             </button>
           </div>
         </div>
 
         <main className="flex-1 px-4 py-5">
           {isLoading ? (
-            <div className="rounded-lg border border-border bg-card px-4 py-10 text-center text-sm text-muted-foreground">
-              정산 기록을 불러오는 중입니다.
+            <div className="space-y-3">
+              {[0, 1, 2].map((item) => (
+                <div
+                  key={item}
+                  className="h-36 animate-pulse rounded-lg border border-border bg-card"
+                />
+              ))}
             </div>
-          ) : items.length === 0 ? (
-            <div className="rounded-lg border border-border bg-card px-4 py-10 text-center text-sm text-muted-foreground">
-              아직 저장된 정산 기록이 없습니다.
+          ) : errorMessage ? (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-8 text-center">
+              <p className="text-sm font-medium text-destructive">{errorMessage}</p>
+              <button
+                type="button"
+                onClick={() => void loadHistory()}
+                className="mt-4 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"
+              >
+                다시 불러오기
+              </button>
+            </div>
+          ) : groups.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-border bg-card px-4 py-12 text-center">
+              <ReceiptText className="mx-auto h-8 w-8 text-muted-foreground" />
+              <p className="mt-3 text-sm font-medium text-foreground">
+                아직 정산 기록이 없습니다.
+              </p>
             </div>
           ) : (
-            <div className="overflow-hidden rounded-lg border border-border bg-card">
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[720px] border-collapse text-sm">
-                  <thead className="bg-muted/70 text-left text-xs font-semibold text-muted-foreground">
-                    <tr>
-                      <th className="px-3 py-3">영수증</th>
-                      <th className="px-3 py-3">메뉴명</th>
-                      <th className="px-3 py-3">참여자명</th>
-                      <th className="px-3 py-3 text-right">정산금액</th>
-                      <th className="px-3 py-3">송금상태</th>
-                      <th className="px-3 py-3">완료여부</th>
-                      <th className="px-3 py-3">완료일시</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((item) => (
-                      <tr
+            <div className="space-y-4">
+              {groups.map((group) => (
+                <section
+                  key={group.receiptId}
+                  className="overflow-hidden rounded-lg border border-border bg-card shadow-sm"
+                >
+                  <div className="border-b border-border bg-muted/40 px-4 py-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h2 className="truncate text-base font-bold text-foreground">
+                          {group.storeName}
+                        </h2>
+                        <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                          <CalendarDays className="h-3.5 w-3.5" />
+                          <span>{formatDate(group.settlementDate)}</span>
+                        </div>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <p className="text-xs text-muted-foreground">합계</p>
+                        <p className="text-sm font-bold text-foreground">
+                          {formatAmount(group.totalAmount)}
+                        </p>
+                      </div>
+                    </div>
+                    <p className="mt-3 text-xs text-muted-foreground">
+                      {group.completedCount}/{group.items.length}건 완료
+                    </p>
+                  </div>
+
+                  <div className="divide-y divide-border">
+                    {group.items.map((item) => (
+                      <div
                         key={item.settlementResultId}
-                        className="border-t border-border"
+                        className="grid grid-cols-[1fr_auto] gap-3 px-4 py-3"
                       >
-                        <td className="px-3 py-3 font-medium text-foreground">
-                          {item.storeName}
-                        </td>
-                        <td className="px-3 py-3 text-foreground">{item.menuName}</td>
-                        <td className="px-3 py-3 text-foreground">
-                          {item.participantName}
-                        </td>
-                        <td className="px-3 py-3 text-right font-semibold text-foreground">
-                          {formatAmount(item.settlementAmount)}
-                        </td>
-                        <td className="px-3 py-3">
-                          <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-foreground">
-                            {item.transferStatus}
-                          </span>
-                        </td>
-                        <td className="px-3 py-3 text-foreground">
-                          {item.completed ? "완료" : "미완료"}
-                        </td>
-                        <td className="px-3 py-3 text-muted-foreground">
-                          {formatDate(item.completedAt)}
-                        </td>
-                      </tr>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-foreground">
+                            {item.menuName}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {item.participantName} · 초대 {normalizeStatus(item.inviteStatus)} ·{" "}
+                            {item.completed ? "완료" : "미완료"}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 flex-col items-end gap-1.5">
+                          <p className="text-sm font-bold text-foreground">
+                            {formatAmount(item.settlementAmount)}
+                          </p>
+                          <StatusBadge status={item.transferStatus} />
+                        </div>
+                      </div>
                     ))}
-                  </tbody>
-                </table>
-              </div>
+                  </div>
+                </section>
+              ))}
             </div>
           )}
         </main>
